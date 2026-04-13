@@ -1,8 +1,15 @@
+# -*- coding: utf-8 -*-
+
 import flet as ft
 import time
 import cv2
 import base64
 import threading
+
+CAMERA_WIDTH = 320
+CAMERA_HEIGHT = 240
+REQUESTED_CAMERA_FPS = 120
+JPEG_QUALITY = 45
 
 def main(page: ft.Page):
     page.title = "NutriSnap - Canlı Kamera"
@@ -53,6 +60,13 @@ def main(page: ft.Page):
         height=250, 
         fit="cover", 
         border_radius=20,
+        gapless_playback=True,
+        placeholder_src=f"data:image/png;base64,{TRANSPARENT_PIXEL}",
+        placeholder_fit="cover",
+        fade_in_animation=0,
+        placeholder_fade_out_animation=0,
+        cache_width=250,
+        cache_height=250,
         visible=False
     )
 
@@ -86,29 +100,25 @@ def main(page: ft.Page):
         size=16
     )
 
-    # --- NİHAİ PERFORMANS KAMERA DÖNGÜSÜ ---
+    # --- YÜKSEK FPS, FLASH YAPMAYAN KAMERA DÖNGÜSÜ ---
     def update_camera_frame():
         nonlocal is_camera_running, cap
         
-        cap = cv2.VideoCapture(0)
+        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
         
-        # İşlem yükünü azaltmak için düşük çözünürlük
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+        # Düşük çözünürlük + MJPG, çoğu webcam'de en yüksek FPS'i verir.
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+        cap.set(cv2.CAP_PROP_FPS, REQUESTED_CAMERA_FPS)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         
-        # JPEG kalitesini 40'a çektik
-        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 40] 
-        frame_counter = 0
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY] 
 
         while is_camera_running:
             ret, frame = cap.read()
             if not ret:
-                continue
-
-            frame_counter += 1
-            
-            # KARE ATLAMA (Frame Skipping): Her 2 kareden 1'ini atla.
-            if frame_counter % 2 != 0:
+                time.sleep(0.005)
                 continue
                 
             # Görüntüyü kare yap
@@ -121,7 +131,10 @@ def main(page: ft.Page):
             # Görüntüyü UI'daki kutunun boyutuna küçült (250x250)
             resized_frame = cv2.resize(cropped_frame, (250, 250), interpolation=cv2.INTER_LINEAR)
             
-            _, im_arr = cv2.imencode('.jpg', resized_frame, encode_param)
+            ok, im_arr = cv2.imencode('.jpg', resized_frame, encode_param)
+            if not ok:
+                continue
+
             im_b64 = base64.b64encode(im_arr).decode('utf-8')
             
             camera_image.src = f"data:image/jpeg;base64,{im_b64}"
@@ -130,9 +143,6 @@ def main(page: ft.Page):
                 camera_image.update()
             except Exception:
                 pass
-            
-            # SİSTEMİ RAHATLATAN NEFES PAYI
-            time.sleep(0.03) 
             
         if cap is not None:
             cap.release()
@@ -143,6 +153,7 @@ def main(page: ft.Page):
         if not is_camera_running:
             is_camera_running = True
             info_text.value = "Yemeği çerçeveye alın ve\ntekrar butona basarak fotoğrafı çekin."
+            info_text.visible = True
             results_card.visible = False
             
             camera_image.visible = True
