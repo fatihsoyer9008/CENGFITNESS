@@ -1,0 +1,7 @@
+# Python önbellek dosyaları
+__pycache__/
+
+# Makine Öğrenmesi veri setleri ve modeller (GitHub'ı kilitlememek için)
+datasets/
+runs/
+*.pt
