@@ -25,10 +25,13 @@ def after_request(response):
 # -----------------------------------------------
 
 camera_lock = threading.Lock()
+model_lock = threading.Lock()
 latest_frame = None
 cap = None
 is_streaming = False
 camera_error = None
+AUTO_CAPTURE_THRESHOLD = 70.0
+AUTO_DETECT_INTERVAL = 0.8
 
 from ultralytics import YOLO
 logging.getLogger("ultralytics").setLevel(logging.ERROR)
@@ -43,6 +46,51 @@ BESIN_DEGERLERI = {
     "pilav": {"cal": 300, "p": "5g", "k": "45g", "y": "10g", "tavsiye": "Yüksek karbonhidrat, enerji verir."},
     "tavuk_durum": {"cal": 400, "p": "25g", "k": "35g", "y": "15g", "tavsiye": "Pratik ve doyurucu."}
 }
+
+def predict_food(cap_frame):
+    with model_lock:
+        results = model(cap_frame)
+
+    try:
+        isimler = results[0].names
+        en_iyi_tahmin_index = results[0].probs.top1
+        predicted_class = isimler[en_iyi_tahmin_index]
+
+        guven_skoru = float(results[0].probs.top1conf)
+        yuzde_skor = round(guven_skoru * 100, 1)
+    except Exception:
+        predicted_class = "Bilinmiyor"
+        yuzde_skor = 0.0
+
+    stats = BESIN_DEGERLERI.get(
+        predicted_class,
+        {"cal": "?", "p": "?", "k": "?", "y": "?", "tavsiye": "Sistemde kayıtlı değil."}
+    )
+
+    return predicted_class, yuzde_skor, stats
+
+def encode_frame_base64(cap_frame, quality=95):
+    ok, buf = cv2.imencode('.jpg', cap_frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+    if not ok:
+        return None
+    return base64.b64encode(buf.tobytes()).decode('utf-8')
+
+def build_capture_payload(cap_frame, status="ok"):
+    predicted_class, yuzde_skor, stats = predict_food(cap_frame)
+    b64 = encode_frame_base64(cap_frame, quality=95)
+
+    if b64 is None:
+        return {"status": "error", "message": "Fotoğraf işlenemedi"}
+
+    return {
+        "status": status,
+        "image": b64,
+        "food_name": predicted_class.replace("_", " ").upper(),
+        "confidence": yuzde_skor,
+        "calories": stats["cal"],
+        "macros": {"protein": stats["p"], "karb": stats["k"], "yag": stats["y"]},
+        "advice": stats["tavsiye"]
+    }
 
 def camera_thread():
     global latest_frame, cap, is_streaming, camera_error
@@ -138,37 +186,45 @@ def frame():
 @app.route('/capture')
 def capture():
     with camera_lock:
-        if latest_frame is not None:
-            cap_frame = latest_frame.copy()
+        cap_frame = latest_frame.copy() if latest_frame is not None else None
 
-            results = model(cap_frame)
+    if cap_frame is None:
+        return jsonify({"status": "error", "message": "Kamera hazır değil"})
 
-            try:
-                isimler = results[0].names
-                en_iyi_tahmin_index = results[0].probs.top1
-                predicted_class = isimler[en_iyi_tahmin_index]
+    return jsonify(build_capture_payload(cap_frame))
 
-                guven_skoru = float(results[0].probs.top1conf)
-                yuzde_skor = round(guven_skoru * 100, 1)
-            except:
-                predicted_class = "Bilinmiyor"
-                yuzde_skor = 0.0
+@app.route('/auto_capture')
+def auto_capture():
+    with camera_lock:
+        cap_frame = latest_frame.copy() if latest_frame is not None else None
 
-            stats = BESIN_DEGERLERI.get(predicted_class, {"cal": "?", "p": "?", "k": "?", "y": "?", "tavsiye": "Sistemde kayıtlı değil."})
+    if cap_frame is None:
+        return jsonify({"status": "waiting", "message": "Kamera hazırlanıyor"})
 
-            _, buf = cv2.imencode('.jpg', cap_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-            b64 = base64.b64encode(buf.tobytes()).decode('utf-8')
+    predicted_class, yuzde_skor, stats = predict_food(cap_frame)
 
-            return jsonify({
-                "status": "ok",
-                "image": b64,
-                "food_name": predicted_class.replace("_", " ").upper(),
-                "confidence": yuzde_skor,
-                "calories": stats["cal"],
-                "macros": {"protein": stats["p"], "karb": stats["k"], "yag": stats["y"]},
-                "advice": stats["tavsiye"]
-            })
-    return jsonify({"status": "error", "message": "Kamera hazır değil"})
+    if yuzde_skor <= AUTO_CAPTURE_THRESHOLD:
+        return jsonify({
+            "status": "waiting",
+            "food_name": predicted_class.replace("_", " ").upper(),
+            "confidence": yuzde_skor,
+            "threshold": AUTO_CAPTURE_THRESHOLD
+        })
+
+    b64 = encode_frame_base64(cap_frame, quality=95)
+    if b64 is None:
+        return jsonify({"status": "error", "message": "Fotoğraf işlenemedi"})
+
+    return jsonify({
+        "status": "detected",
+        "image": b64,
+        "food_name": predicted_class.replace("_", " ").upper(),
+        "confidence": yuzde_skor,
+        "threshold": AUTO_CAPTURE_THRESHOLD,
+        "calories": stats["cal"],
+        "macros": {"protein": stats["p"], "karb": stats["k"], "yag": stats["y"]},
+        "advice": stats["tavsiye"]
+    })
 
 @app.route('/health')
 def health():
@@ -180,7 +236,7 @@ def health():
 # =====================================================================
 
 def main(page: ft.Page):
-    page.title = "NutriSnap AI"
+    page.title = "CENG FİTNESS"
     page.theme_mode = "light"
     page.horizontal_alignment = "center"
     page.scroll = "auto"
@@ -189,7 +245,7 @@ def main(page: ft.Page):
     TRANSPARENT_PIXEL = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
 
     page.appbar = ft.AppBar(
-        title=ft.Text("NutriSnap 🥗", weight="bold", color="white"),
+        title=ft.Text("CENG FİTNESS", weight="bold", color="white"),
         center_title=True,
         bgcolor="teal700",
     )
@@ -202,7 +258,7 @@ def main(page: ft.Page):
 
     placeholder = ft.Container(
         width=300, height=300, bgcolor="grey200", border_radius=20,
-        content=ft.Icon("restaurant", size=72, color="grey400"),
+        content=ft.Icon(ft.Icons.RESTAURANT, size=72, color="grey400"),
         alignment="center"
     )
 
@@ -234,17 +290,16 @@ def main(page: ft.Page):
     info_text = ft.Text("Sistem hazır! Kamerayı açabilirsiniz.", color="teal")
     state = {"mode": "idle", "poller_id": 0}
 
-    btn_icon = ft.Icon("videocam", color="white")
-    btn_text = ft.Text("Kamerayı Aç", color="white", weight="bold", size=16)
-
-    action_btn = ft.Container(
-        content=ft.Row([btn_icon, btn_text], alignment="center", tight=True),
+    action_btn = ft.IconButton(
+        icon=ft.Icons.VIDEOCAM,
+        icon_color="white",
+        icon_size=34,
         bgcolor="teal",
-        padding=15,
-        width=220,
-        border_radius=15,
-        ink=True,
-        on_click=lambda e: handle_action(e)
+        width=64,
+        height=64,
+        padding=0,
+        tooltip="Kamerayı Aç",
+        on_click=lambda e: handle_action(e),
     )
 
     def show_idle_error(message):
@@ -255,11 +310,54 @@ def main(page: ft.Page):
         analyze_overlay.visible = False
         result_card.visible = False
         action_btn.disabled = False
-        btn_icon.name = "videocam"
-        btn_text.value = "Kamerayı Aç"
+        action_btn.icon = ft.Icons.VIDEOCAM
+        action_btn.tooltip = "Kamerayı Aç"
         action_btn.bgcolor = "teal"
         info_text.visible = True
         info_text.value = message
+        page.update()
+
+    def display_result(resp, automatic=False):
+        state["mode"] = "result"
+        state["poller_id"] += 1
+        camera_stream.visible = False
+        placeholder.visible = False
+        frozen_image.src = f"data:image/jpeg;base64,{resp['image']}"
+        frozen_image.visible = True
+
+        food_name = resp.get("food_name", "BİLİNMİYOR")
+        conf = resp.get("confidence", 0.0)
+        cal = resp.get("calories", 0)
+        macros = resp.get("macros", {"protein": "0g", "karb": "0g", "yag": "0g"})
+        advice = resp.get("advice", "")
+
+        result_card.content.content.controls = [
+            ft.Text(f"{food_name} (%{conf})", size=22, weight="bold"),
+            ft.Divider(height=10),
+            ft.Text(f"{cal} kcal", size=28, color="teal700", weight="bold"),
+            ft.Row([
+                ft.Text(f"P: {macros['protein']}", color="red", weight="bold"),
+                ft.Text(f"K: {macros['karb']}", color="orange", weight="bold"),
+                ft.Text(f"Y: {macros['yag']}", color="amber", weight="bold")
+            ], alignment="spaceAround"),
+            ft.Container(
+                margin=ft.margin.only(top=10), padding=10, bgcolor="blue50", border_radius=10,
+                content=ft.Text(f"💡 {advice}", color="blue800", italic=True, text_align="center")
+            )
+        ]
+
+        analyze_overlay.visible = False
+        result_card.visible = True
+        action_btn.disabled = False
+        action_btn.icon = ft.Icons.REPLAY
+        action_btn.tooltip = "Yeni Tarama"
+        action_btn.bgcolor = "teal"
+        info_text.visible = True
+        info_text.value = (
+            f"%{conf} güvenle otomatik yakalandı. Yeni tarama için tıklayın."
+            if automatic else
+            "Yeni tarama için tıklayın."
+        )
         page.update()
 
     def start_frame_poller():
@@ -268,6 +366,7 @@ def main(page: ft.Page):
 
         def poll():
             missed_frames = 0
+            next_detect_at = time.monotonic() + 0.8
             while state["mode"] == "streaming" and state["poller_id"] == poller_id:
                 try:
                     resp = requests.get(f"{SERVER_URL}/frame", timeout=1)
@@ -276,6 +375,24 @@ def main(page: ft.Page):
                     if data.get("status") == "ok":
                         missed_frames = 0
                         camera_stream.src = f"data:image/jpeg;base64,{data['image']}"
+
+                        if time.monotonic() >= next_detect_at:
+                            next_detect_at = time.monotonic() + AUTO_DETECT_INTERVAL
+                            auto_resp = requests.get(f"{SERVER_URL}/auto_capture", timeout=8)
+                            auto_data = auto_resp.json()
+
+                            if auto_data.get("status") == "detected":
+                                if state["mode"] == "streaming" and state["poller_id"] == poller_id:
+                                    requests.get(f"{SERVER_URL}/stop", timeout=1)
+                                    display_result(auto_data, automatic=True)
+                                break
+
+                            if auto_data.get("status") == "waiting":
+                                food_name = auto_data.get("food_name", "BİLİNMİYOR")
+                                conf = auto_data.get("confidence", 0.0)
+                                if conf > 0:
+                                    info_text.value = f"Algılanıyor: {food_name} (%{conf}). %70 üstünde otomatik çeker."
+
                         page.update()
                     else:
                         missed_frames += 1
@@ -311,8 +428,8 @@ def main(page: ft.Page):
                 analyze_overlay.visible = False
                 result_card.visible = False
 
-                btn_icon.name = "camera"
-                btn_text.value = "Fotoğraf Çek"
+                action_btn.icon = ft.Icons.CAMERA
+                action_btn.tooltip = "Fotoğraf Çek"
                 action_btn.bgcolor = "red400"
 
                 info_text.value = "Yemeği çerçeveye alın ve butona basın."
@@ -336,41 +453,8 @@ def main(page: ft.Page):
                     camera_stream.visible = False
 
                     if resp.get("status") == "ok":
-                        frozen_image.src = f"data:image/jpeg;base64,{resp['image']}"
-                        frozen_image.visible = True
-
-                        food_name = resp.get("food_name", "BİLİNMİYOR")
-                        conf = resp.get("confidence", 0.0)
-                        cal = resp.get("calories", 0)
-                        macros = resp.get("macros", {"protein": "0g", "karb": "0g", "yag": "0g"})
-                        advice = resp.get("advice", "")
-
-                        result_card.content.content.controls = [
-                            ft.Text(f"{food_name} (%{conf})", size=22, weight="bold"),
-                            ft.Divider(height=10),
-                            ft.Text(f"{cal} kcal", size=28, color="teal700", weight="bold"),
-                            ft.Row([
-                                ft.Text(f"P: {macros['protein']}", color="red", weight="bold"),
-                                ft.Text(f"K: {macros['karb']}", color="orange", weight="bold"),
-                                ft.Text(f"Y: {macros['yag']}", color="amber", weight="bold")
-                            ], alignment="spaceAround"),
-                            ft.Container(
-                                margin=ft.margin.only(top=10), padding=10, bgcolor="blue50", border_radius=10,
-                                content=ft.Text(f"💡 {advice}", color="blue800", italic=True, text_align="center")
-                            )
-                        ]
-
-                        analyze_overlay.visible = False
-                        result_card.visible = True
-                        state["mode"] = "result"
-
-                        action_btn.disabled = False
-                        btn_icon.name = "replay"
-                        btn_text.value = "Yeni Tarama"
-                        action_btn.bgcolor = "teal"
-
-                        info_text.visible = True
-                        info_text.value = "Yeni tarama için tıklayın."
+                        display_result(resp)
+                        return
                     else:
                         show_idle_error(resp.get("message", "Kamera hazır değil."))
                         return
@@ -397,8 +481,8 @@ def main(page: ft.Page):
             result_card.visible = False
             action_btn.disabled = False
 
-            btn_icon.name = "videocam"
-            btn_text.value = "Kamerayı Aç"
+            action_btn.icon = ft.Icons.VIDEOCAM
+            action_btn.tooltip = "Kamerayı Aç"
             action_btn.bgcolor = "teal"
             info_text.value = "Kamerayı açmak için butona basın."
             page.update()
