@@ -1,246 +1,433 @@
 import flet as ft
-import time
-import cv2
-import base64
+import requests
 import threading
+import time
+import base64
+import cv2
+from flask import Flask, Response, jsonify
+import logging
 
-CAMERA_WIDTH = 320
-CAMERA_HEIGHT = 240
-REQUESTED_CAMERA_FPS = 120
-JPEG_QUALITY = 45
+# =====================================================================
+# 1. BÖLÜM: FLASK SUNUCUSU & YAPAY ZEKA (ARKA PLAN)
+# =====================================================================
+
+app = Flask(__name__)
+SERVER_URL = "http://127.0.0.1:5000"
+
+# --- WEB TARAYICISI GÜVENLİK İZNİ (CORS FIX) ---
+# Tarayıcının kamerayı engellememesi için gereken geçiş izni
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
+# -----------------------------------------------
+
+camera_lock = threading.Lock()
+latest_frame = None
+cap = None
+is_streaming = False
+camera_error = None
+
+from ultralytics import YOLO
+logging.getLogger("ultralytics").setLevel(logging.ERROR)
+
+print("🧠 Yapay Zeka Modeli Yükleniyor...")
+model = YOLO("best.pt")
+print("✅ Model Hazır!")
+
+BESIN_DEGERLERI = {
+    "kofte": {"cal": 250, "p": "18g", "k": "10g", "y": "15g", "tavsiye": "Protein deposu, harika tercih!"},
+    "salata": {"cal": 50, "p": "1g", "k": "5g", "y": "2g", "tavsiye": "Diyet dostu, lifli ve sağlıklı."},
+    "pilav": {"cal": 300, "p": "5g", "k": "45g", "y": "10g", "tavsiye": "Yüksek karbonhidrat, enerji verir."},
+    "tavuk_durum": {"cal": 400, "p": "25g", "k": "35g", "y": "15g", "tavsiye": "Pratik ve doyurucu."}
+}
+
+def camera_thread():
+    global latest_frame, cap, is_streaming, camera_error
+    # Windows'ta kameranın anında açılması için CAP_DSHOW eklendi
+    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+
+    if not cap.isOpened():
+        camera_error = "Kamera açılamadı. Kamera başka bir uygulama tarafından kullanılıyor olabilir."
+        is_streaming = False
+        cap.release()
+        cap = None
+        return
+
+    camera_error = None
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+    while is_streaming:
+        ret, cap_frame = cap.read()
+        if ret:
+            h, w, _ = cap_frame.shape
+            min_dim = min(h, w)
+            sx, sy = (w - min_dim) // 2, (h - min_dim) // 2
+            cropped = cap_frame[sy:sy+min_dim, sx:sx+min_dim]
+            resized = cv2.resize(cropped, (320, 320))
+            with camera_lock:
+                latest_frame = resized
+        else:
+            camera_error = "Kameradan görüntü alınamadı."
+        time.sleep(0.01)
+
+    if cap:
+        cap.release()
+        cap = None
+
+def generate_mjpeg():
+    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 65]
+    while True:
+        if not is_streaming: break
+        with camera_lock:
+            current_frame = latest_frame
+        if current_frame is None:
+            time.sleep(0.1)
+            continue
+        _, buf = cv2.imencode('.jpg', current_frame, encode_param)
+        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+        time.sleep(0.04)
+
+@app.route('/video_feed')
+def video_feed():
+    if not is_streaming:
+        return "Kamera kapalı", 404
+    return Response(generate_mjpeg(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/start')
+def start_camera():
+    global is_streaming, latest_frame, camera_error
+    if not is_streaming:
+        camera_error = None
+        with camera_lock:
+            latest_frame = None
+        is_streaming = True
+        threading.Thread(target=camera_thread, daemon=True).start()
+    return jsonify({"status": "ok"})
+
+@app.route('/stop')
+def stop_camera():
+    global is_streaming, latest_frame, camera_error
+    is_streaming = False
+    camera_error = None
+    with camera_lock:
+        latest_frame = None
+    return jsonify({"status": "ok"})
+
+@app.route('/frame')
+def frame():
+    if not is_streaming:
+        return jsonify({"status": "error", "message": camera_error or "Kamera kapalı"}), 503
+
+    with camera_lock:
+        current_frame = latest_frame.copy() if latest_frame is not None else None
+
+    if current_frame is None:
+        return jsonify({"status": "error", "message": camera_error or "Kamera hazırlanıyor"}), 503
+
+    ok, buf = cv2.imencode('.jpg', current_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+    if not ok:
+        return jsonify({"status": "error", "message": "Görüntü işlenemedi"}), 500
+
+    b64 = base64.b64encode(buf.tobytes()).decode('utf-8')
+    return jsonify({"status": "ok", "image": b64})
+
+@app.route('/capture')
+def capture():
+    with camera_lock:
+        if latest_frame is not None:
+            cap_frame = latest_frame.copy()
+
+            results = model(cap_frame)
+
+            try:
+                isimler = results[0].names
+                en_iyi_tahmin_index = results[0].probs.top1
+                predicted_class = isimler[en_iyi_tahmin_index]
+
+                guven_skoru = float(results[0].probs.top1conf)
+                yuzde_skor = round(guven_skoru * 100, 1)
+            except:
+                predicted_class = "Bilinmiyor"
+                yuzde_skor = 0.0
+
+            stats = BESIN_DEGERLERI.get(predicted_class, {"cal": "?", "p": "?", "k": "?", "y": "?", "tavsiye": "Sistemde kayıtlı değil."})
+
+            _, buf = cv2.imencode('.jpg', cap_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+            b64 = base64.b64encode(buf.tobytes()).decode('utf-8')
+
+            return jsonify({
+                "status": "ok",
+                "image": b64,
+                "food_name": predicted_class.replace("_", " ").upper(),
+                "confidence": yuzde_skor,
+                "calories": stats["cal"],
+                "macros": {"protein": stats["p"], "karb": stats["k"], "yag": stats["y"]},
+                "advice": stats["tavsiye"]
+            })
+    return jsonify({"status": "error", "message": "Kamera hazır değil"})
+
+@app.route('/health')
+def health():
+    return jsonify({"status": "ok"})
+
+
+# =====================================================================
+# 2. BÖLÜM: FLET ARAYÜZÜ (ÖN YÜZ)
+# =====================================================================
 
 def main(page: ft.Page):
-    page.title = "NutriSnap - Canlı Kamera"
-    page.theme_mode = ft.ThemeMode.LIGHT
-    page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
-    page.vertical_alignment = ft.MainAxisAlignment.CENTER
-    
-    is_camera_running = False
-    cap = None
-
-    def install_app_simulation(e):
-        snack = ft.SnackBar(
-            content=ft.Text("PWA Yükleme tetiklendi! Uygulama ana ekrana ekleniyor..."),
-            bgcolor=ft.Colors.GREEN_700
-        )
-        page.overlay.append(snack)
-        snack.open = True
-        page.update()
-
-    page.appbar = ft.AppBar(
-        title=ft.Text("Yemek Tarayıcı", weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
-        center_title=True,
-        bgcolor=ft.Colors.TEAL,
-        actions=[
-            ft.IconButton(
-                icon=ft.Icons.INSTALL_MOBILE, 
-                icon_color=ft.Colors.WHITE, 
-                tooltip="Ana Ekrana Ekle",
-                on_click=install_app_simulation
-            )
-        ]
-    )
-
-    def macro_widget(label, value, color):
-        return ft.Column(
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            controls=[
-                ft.Text(value, size=18, weight=ft.FontWeight.BOLD, color=color),
-                ft.Text(label, size=12, color=ft.Colors.BLACK54),
-            ]
-        )
+    page.title = "NutriSnap AI"
+    page.theme_mode = "light"
+    page.horizontal_alignment = "center"
+    page.scroll = "auto"
+    page.padding = 30
 
     TRANSPARENT_PIXEL = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
 
-    camera_image = ft.Image(
-        src=f"data:image/png;base64,{TRANSPARENT_PIXEL}", 
-        width=250, 
-        height=250, 
-        fit="cover", 
-        border_radius=20,
-        gapless_playback=True,
-        placeholder_src=f"data:image/png;base64,{TRANSPARENT_PIXEL}",
-        placeholder_fit="cover",
-        fade_in_animation=0,
-        placeholder_fade_out_animation=0,
-        cache_width=250,
-        cache_height=250,
-        visible=False
+    page.appbar = ft.AppBar(
+        title=ft.Text("NutriSnap 🥗", weight="bold", color="white"),
+        center_title=True,
+        bgcolor="teal700",
     )
 
-    camera_container = ft.Container(
-        width=250,
-        height=250,
-        bgcolor=ft.Colors.GREY_200,
-        border_radius=20,
-        border=ft.border.all(2, ft.Colors.TEAL),
-        alignment=ft.Alignment(0, 0), 
-        content=ft.Icon(ft.Icons.RESTAURANT, size=80, color=ft.Colors.GREY)
+    camera_stream = ft.Image(
+        src=f"data:image/png;base64,{TRANSPARENT_PIXEL}",
+        width=300, height=300, fit="cover", border_radius=20, visible=False,
+        gapless_playback=True
     )
 
-    results_card = ft.Card(
-        elevation=4,
+    placeholder = ft.Container(
+        width=300, height=300, bgcolor="grey200", border_radius=20,
+        content=ft.Icon("restaurant", size=72, color="grey400"),
+        alignment="center"
+    )
+
+    frozen_image = ft.Image(
+        src=f"data:image/png;base64,{TRANSPARENT_PIXEL}",
+        width=300, height=300, fit="cover", border_radius=20, visible=False,
+        gapless_playback=True
+    )
+
+    analyze_overlay = ft.Container(
+        width=300, height=300, bgcolor="#AA000000",
+        border_radius=20, alignment="center", visible=False,
+        content=ft.Column([
+            ft.ProgressRing(color="teal200"),
+            ft.Text("Yapay Zeka Analiz Ediyor...", color="white", weight="bold")
+        ], alignment="center", horizontal_alignment="center")
+    )
+
+    camera_stack = ft.Stack([placeholder, camera_stream, frozen_image, analyze_overlay], width=300, height=300)
+
+    result_card = ft.Card(
         visible=False,
         content=ft.Container(
-            padding=20,
-            width=350,
-            content=ft.Column(
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                controls=[] 
-            )
+            padding=20, width=320,
+            content=ft.Column([], horizontal_alignment="center")
         )
     )
 
-    info_text = ft.Text(
-        "Kamerayı açmak için aşağıdaki butona tıklayın.",
-        text_align=ft.TextAlign.CENTER,
-        color=ft.Colors.BLACK54,
-        size=16
+    info_text = ft.Text("Sistem hazır! Kamerayı açabilirsiniz.", color="teal")
+    state = {"mode": "idle", "poller_id": 0}
+
+    btn_icon = ft.Icon("videocam", color="white")
+    btn_text = ft.Text("Kamerayı Aç", color="white", weight="bold", size=16)
+
+    action_btn = ft.Container(
+        content=ft.Row([btn_icon, btn_text], alignment="center", tight=True),
+        bgcolor="teal",
+        padding=15,
+        width=220,
+        border_radius=15,
+        ink=True,
+        on_click=lambda e: handle_action(e)
     )
 
-    # --- YÜKSEK FPS, FLASH YAPMAYAN KAMERA DÖNGÜSÜ ---
-    def update_camera_frame():
-        nonlocal is_camera_running, cap
-        
-        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-        
-        # Düşük çözünürlük + MJPG, çoğu webcam'de en yüksek FPS'i verir.
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
-        cap.set(cv2.CAP_PROP_FPS, REQUESTED_CAMERA_FPS)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        
-        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY] 
+    def show_idle_error(message):
+        state["mode"] = "idle"
+        placeholder.visible = True
+        camera_stream.visible = False
+        frozen_image.visible = False
+        analyze_overlay.visible = False
+        result_card.visible = False
+        action_btn.disabled = False
+        btn_icon.name = "videocam"
+        btn_text.value = "Kamerayı Aç"
+        action_btn.bgcolor = "teal"
+        info_text.visible = True
+        info_text.value = message
+        page.update()
 
-        while is_camera_running:
-            ret, frame = cap.read()
-            if not ret:
-                time.sleep(0.005)
-                continue
-                
-            # Görüntüyü kare yap
-            h, w, _ = frame.shape
-            min_dim = min(h, w)
-            start_x = (w - min_dim) // 2
-            start_y = (h - min_dim) // 2
-            cropped_frame = frame[start_y:start_y+min_dim, start_x:start_x+min_dim]
-            
-            # Görüntüyü UI'daki kutunun boyutuna küçült (250x250)
-            resized_frame = cv2.resize(cropped_frame, (250, 250), interpolation=cv2.INTER_LINEAR)
-            
-            ok, im_arr = cv2.imencode('.jpg', resized_frame, encode_param)
-            if not ok:
-                continue
+    def start_frame_poller():
+        state["poller_id"] += 1
+        poller_id = state["poller_id"]
 
-            im_b64 = base64.b64encode(im_arr).decode('utf-8')
-            
-            camera_image.src = f"data:image/jpeg;base64,{im_b64}"
-            
+        def poll():
+            missed_frames = 0
+            while state["mode"] == "streaming" and state["poller_id"] == poller_id:
+                try:
+                    resp = requests.get(f"{SERVER_URL}/frame", timeout=1)
+                    data = resp.json()
+
+                    if data.get("status") == "ok":
+                        missed_frames = 0
+                        camera_stream.src = f"data:image/jpeg;base64,{data['image']}"
+                        page.update()
+                    else:
+                        missed_frames += 1
+                        if missed_frames >= 30:
+                            requests.get(f"{SERVER_URL}/stop", timeout=1)
+                            show_idle_error(data.get("message", "Kamera hazır değil."))
+                            break
+                except Exception as ex:
+                    missed_frames += 1
+                    if missed_frames >= 30:
+                        print("Frame hatası:", ex)
+                        try:
+                            requests.get(f"{SERVER_URL}/stop", timeout=1)
+                        except Exception:
+                            pass
+                        show_idle_error("Kameradan görüntü alınamadı.")
+                        break
+
+                time.sleep(0.08)
+
+        threading.Thread(target=poll, daemon=True).start()
+
+    def handle_action(e):
+        if state["mode"] == "idle":
             try:
-                camera_image.update()
-            except Exception:
-                pass
-            
-        if cap is not None:
-            cap.release()
+                requests.get(f"{SERVER_URL}/start", timeout=2)
+                state["mode"] = "streaming"
+                placeholder.visible = False
+                camera_stream.visible = True
+                camera_stream.src = f"data:image/png;base64,{TRANSPARENT_PIXEL}"
 
-    def handle_main_action(e):
-        nonlocal is_camera_running
-        
-        if not is_camera_running:
-            is_camera_running = True
-            info_text.value = "Yemeği çerçeveye alın ve\ntekrar butona basarak fotoğrafı çekin."
-            info_text.visible = True
-            results_card.visible = False
-            
-            camera_image.visible = True
-            camera_container.content = camera_image
-            
-            fab.icon = ft.Icons.CAMERA
-            fab.tooltip = "Fotoğrafı Çek ve Analiz Et"
-            fab.bgcolor = ft.Colors.RED_400 
-            
-            page.update()
-            
-            threading.Thread(target=update_camera_frame, daemon=True).start()
+                frozen_image.visible = False
+                analyze_overlay.visible = False
+                result_card.visible = False
 
-        else:
-            is_camera_running = False 
-            fab.disabled = True
+                btn_icon.name = "camera"
+                btn_text.value = "Fotoğraf Çek"
+                action_btn.bgcolor = "red400"
+
+                info_text.value = "Yemeği çerçeveye alın ve butona basın."
+                page.update()
+                start_frame_poller()
+            except Exception as ex:
+                print("Kamera başlatma hatası:", ex)
+                show_idle_error("Kamera başlatılamadı.")
+
+        elif state["mode"] == "streaming":
+            state["mode"] = "analyzing"
+            action_btn.disabled = True
+            analyze_overlay.visible = True
             info_text.visible = False
-            
-            camera_container.content = ft.Stack([
-                camera_image, 
-                ft.Container( 
-                    bgcolor=ft.Colors.with_opacity(0.6, ft.Colors.BLACK),
-                    alignment=ft.Alignment(0, 0),
-                    content=ft.Column(
-                        alignment=ft.MainAxisAlignment.CENTER,
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        controls=[
-                            ft.ProgressRing(color=ft.Colors.TEAL),
-                            ft.Text("Yapay Zeka Analiz Ediyor...", color=ft.Colors.WHITE, size=14, weight=ft.FontWeight.BOLD)
+            page.update()
+
+            def process():
+                try:
+                    resp = requests.get(f"{SERVER_URL}/capture", timeout=15).json()
+                    requests.get(f"{SERVER_URL}/stop", timeout=2)
+                    camera_stream.visible = False
+
+                    if resp.get("status") == "ok":
+                        frozen_image.src = f"data:image/jpeg;base64,{resp['image']}"
+                        frozen_image.visible = True
+
+                        food_name = resp.get("food_name", "BİLİNMİYOR")
+                        conf = resp.get("confidence", 0.0)
+                        cal = resp.get("calories", 0)
+                        macros = resp.get("macros", {"protein": "0g", "karb": "0g", "yag": "0g"})
+                        advice = resp.get("advice", "")
+
+                        result_card.content.content.controls = [
+                            ft.Text(f"{food_name} (%{conf})", size=22, weight="bold"),
+                            ft.Divider(height=10),
+                            ft.Text(f"{cal} kcal", size=28, color="teal700", weight="bold"),
+                            ft.Row([
+                                ft.Text(f"P: {macros['protein']}", color="red", weight="bold"),
+                                ft.Text(f"K: {macros['karb']}", color="orange", weight="bold"),
+                                ft.Text(f"Y: {macros['yag']}", color="amber", weight="bold")
+                            ], alignment="spaceAround"),
+                            ft.Container(
+                                margin=ft.margin.only(top=10), padding=10, bgcolor="blue50", border_radius=10,
+                                content=ft.Text(f"💡 {advice}", color="blue800", italic=True, text_align="center")
+                            )
                         ]
-                    )
-                )
-            ])
+
+                        analyze_overlay.visible = False
+                        result_card.visible = True
+                        state["mode"] = "result"
+
+                        action_btn.disabled = False
+                        btn_icon.name = "replay"
+                        btn_text.value = "Yeni Tarama"
+                        action_btn.bgcolor = "teal"
+
+                        info_text.visible = True
+                        info_text.value = "Yeni tarama için tıklayın."
+                    else:
+                        show_idle_error(resp.get("message", "Kamera hazır değil."))
+                        return
+                except Exception as ex:
+                    print("Hata:", ex)
+                    try:
+                        requests.get(f"{SERVER_URL}/stop", timeout=2)
+                    except Exception:
+                        pass
+                    show_idle_error("Fotoğraf alınırken hata oluştu.")
+                    return
+                page.update()
+
+            threading.Thread(target=process, daemon=True).start()
+
+        elif state["mode"] == "result":
+            state["mode"] = "idle"
+            state["poller_id"] += 1
+            frozen_image.visible = False
+            camera_stream.visible = False
+            camera_stream.src = f"data:image/png;base64,{TRANSPARENT_PIXEL}"
+            analyze_overlay.visible = False
+            placeholder.visible = True
+            result_card.visible = False
+            action_btn.disabled = False
+
+            btn_icon.name = "videocam"
+            btn_text.value = "Kamerayı Aç"
+            action_btn.bgcolor = "teal"
+            info_text.value = "Kamerayı açmak için butona basın."
             page.update()
 
-            time.sleep(2)
-            
-            food_name = "tavuklu makarna"
-            calories = 350
-            macros = {"Protein": 30, "Karbonhidrat": 5, "Yağ": 20}
-            advice = "Yüksek omega-3 içerikli harika bir tercih! Günlük hedefine uygun."
-
-            camera_container.content = camera_image 
-            
-            results_card.content.content.controls = [
-                ft.Text(food_name, size=22, weight=ft.FontWeight.BOLD),
-                ft.Divider(),
-                ft.Text(f"{calories} kcal", size=28, color=ft.Colors.TEAL, weight=ft.FontWeight.BOLD),
-                ft.Row(
-                    alignment=ft.MainAxisAlignment.SPACE_AROUND,
-                    controls=[
-                        macro_widget("Protein", f"{macros['Protein']}g", ft.Colors.RED_ACCENT),
-                        macro_widget("Karb", f"{macros['Karbonhidrat']}g", ft.Colors.ORANGE),
-                        macro_widget("Yağ", f"{macros['Yağ']}g", ft.Colors.AMBER),
-                    ]
-                ),
-                ft.Container(
-                    margin=ft.margin.only(top=15),
-                    padding=10,
-                    bgcolor=ft.Colors.BLUE_50,
-                    border_radius=10,
-                    content=ft.Text(f"💡 {advice}", color=ft.Colors.BLUE_800, italic=True, text_align=ft.TextAlign.CENTER)
-                )
-            ]
-            
-            results_card.visible = True
-            
-            fab.disabled = False
-            fab.icon = ft.Icons.REPLAY
-            fab.tooltip = "Yeni Görüntü Tara"
-            fab.bgcolor = ft.Colors.TEAL
-            page.update()
-
-    fab = ft.FloatingActionButton(
-        icon=ft.Icons.VIDEOCAM,
-        tooltip="Kamerayı Aç", 
-        bgcolor=ft.Colors.TEAL,
-        on_click=handle_main_action
-    )
-    
-    page.floating_action_button = fab
-    page.floating_action_button_location = ft.FloatingActionButtonLocation.CENTER_FLOAT
-
-    page.add(
-        camera_container,
+    page.add(ft.Column([
+        ft.Container(content=camera_stack, border_radius=20, border=ft.border.all(2, "teal300")),
         ft.Container(height=10),
         info_text,
-        results_card
-    )
+        result_card,
+        ft.Container(height=10),
+        ft.Row([action_btn], alignment="center"),
+        ft.Container(height=40)
+    ], horizontal_alignment="center"))
 
-# Uygulamayı web tarayıcısında başlatmak için WEB_BROWSER view parametresini ekledik
-ft.app(target=main, view=ft.AppView.WEB_BROWSER)
+
+# =====================================================================
+# 3. BÖLÜM: SİSTEMİ BAŞLATMA
+# =====================================================================
+
+def run_flask_app():
+    app.run(host='127.0.0.1', port=5000, threaded=True, debug=False, use_reloader=False)
+
+if __name__ == '__main__':
+    flask_thread = threading.Thread(target=run_flask_app, daemon=True)
+    flask_thread.start()
+
+    time.sleep(1.5)
+
+    try:
+        ft.run(main, view="web_browser", port=8000)
+    except:
+        ft.app(target=main, view="web_browser", port=8000)
