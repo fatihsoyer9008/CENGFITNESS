@@ -3,5 +3,5 @@ __pycache__/
 
 # Makine Öğrenmesi veri setleri ve modeller (GitHub'ı kilitlememek için)
 datasets/
-runs/
+#runs/
 *.pt
