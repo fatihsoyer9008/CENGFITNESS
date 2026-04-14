@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import flet as ft
 import time
 import cv2
@@ -191,7 +189,7 @@ def main(page: ft.Page):
 
             time.sleep(2)
             
-            food_name = "Izgara Somon ve Kuşkonmaz"
+            food_name = "tavuklu makarna"
             calories = 350
             macros = {"Protein": 30, "Karbonhidrat": 5, "Yağ": 20}
             advice = "Yüksek omega-3 içerikli harika bir tercih! Günlük hedefine uygun."
