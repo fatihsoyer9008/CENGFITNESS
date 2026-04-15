@@ -7,14 +7,11 @@ import cv2
 from flask import Flask, Response, jsonify
 import logging
 
-# =====================================================================
-# 1. BÖLÜM: FLASK SUNUCUSU & YAPAY ZEKA (ARKA PLAN)
-# =====================================================================
 
 app = Flask(__name__)
 SERVER_URL = "http://127.0.0.1:5000"
 
-# --- WEB TARAYICISI GÜVENLİK İZNİ (CORS FIX) ---
+#  WEB TARAYICISI GÜVENLİK İZNİ 
 # Tarayıcının kamerayı engellememesi için gereken geçiş izni
 @app.after_request
 def after_request(response):
@@ -36,7 +33,7 @@ AUTO_DETECT_INTERVAL = 0.8
 from ultralytics import YOLO
 logging.getLogger("ultralytics").setLevel(logging.ERROR)
 
-print("🧠 Yapay Zeka Modeli Yükleniyor...")
+print("Yapay Zeka Asistanımız Yükleniyor...")
 model = YOLO("best.pt")
 print("✅ Model Hazır!")
 
@@ -231,9 +228,7 @@ def health():
     return jsonify({"status": "ok"})
 
 
-# =====================================================================
-# 2. BÖLÜM: FLET ARAYÜZÜ (ÖN YÜZ)
-# =====================================================================
+# burada flutter kullanarak arayüz kısmını yapıyoruz
 
 def main(page: ft.Page):
     page.title = "CENG FİTNESS"
@@ -498,9 +493,7 @@ def main(page: ft.Page):
     ], horizontal_alignment="center"))
 
 
-# =====================================================================
-# 3. BÖLÜM: SİSTEMİ BAŞLATMA
-# =====================================================================
+# sistem burada başlatılıyor.
 
 def run_flask_app():
     app.run(host='127.0.0.1', port=5000, threaded=True, debug=False, use_reloader=False)
