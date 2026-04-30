@@ -27,8 +27,6 @@ latest_frame = None
 cap = None
 is_streaming = False
 camera_error = None
-AUTO_CAPTURE_THRESHOLD = 70.0
-AUTO_DETECT_INTERVAL = 0.8
 
 from ultralytics import YOLO
 logging.getLogger("ultralytics").setLevel(logging.ERROR)
@@ -190,39 +188,6 @@ def capture():
 
     return jsonify(build_capture_payload(cap_frame))
 
-@app.route('/auto_capture')
-def auto_capture():
-    with camera_lock:
-        cap_frame = latest_frame.copy() if latest_frame is not None else None
-
-    if cap_frame is None:
-        return jsonify({"status": "waiting", "message": "Kamera hazırlanıyor"})
-
-    predicted_class, yuzde_skor, stats = predict_food(cap_frame)
-
-    if yuzde_skor <= AUTO_CAPTURE_THRESHOLD:
-        return jsonify({
-            "status": "waiting",
-            "food_name": predicted_class.replace("_", " ").upper(),
-            "confidence": yuzde_skor,
-            "threshold": AUTO_CAPTURE_THRESHOLD
-        })
-
-    b64 = encode_frame_base64(cap_frame, quality=95)
-    if b64 is None:
-        return jsonify({"status": "error", "message": "Fotoğraf işlenemedi"})
-
-    return jsonify({
-        "status": "detected",
-        "image": b64,
-        "food_name": predicted_class.replace("_", " ").upper(),
-        "confidence": yuzde_skor,
-        "threshold": AUTO_CAPTURE_THRESHOLD,
-        "calories": stats["cal"],
-        "macros": {"protein": stats["p"], "karb": stats["k"], "yag": stats["y"]},
-        "advice": stats["tavsiye"]
-    })
-
 @app.route('/health')
 def health():
     return jsonify({"status": "ok"})
@@ -232,17 +197,55 @@ def health():
 
 def main(page: ft.Page):
     page.title = "CENG FİTNESS"
-    page.theme_mode = "light"
+    page.theme_mode = ft.ThemeMode.LIGHT
     page.horizontal_alignment = "center"
     page.scroll = "auto"
     page.padding = 30
 
     TRANSPARENT_PIXEL = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    theme_state = {"dark": False}
+
+    def toggle_theme(e):
+        theme_state["dark"] = not theme_state["dark"]
+        page.theme_mode = ft.ThemeMode.DARK if theme_state["dark"] else ft.ThemeMode.LIGHT
+        apply_theme()
+        page.update()
+
+    theme_menu_item = ft.PopupMenuItem(
+        icon=ft.Icons.DARK_MODE,
+        content="Dark mode",
+        on_click=toggle_theme,
+    )
+    download_menu_item = ft.PopupMenuItem(
+        icon=ft.Icons.DOWNLOAD,
+        content="İndir",
+        disabled=True,
+    )
+    account_menu_item = ft.PopupMenuItem(
+        icon=ft.Icons.PERSON,
+        content="Hesap",
+        disabled=True,
+    )
+    menu_btn = ft.PopupMenuButton(
+        content=ft.Container(
+            width=44,
+            height=44,
+            border_radius=22,
+            bgcolor="#3E475B",
+            alignment=ft.Alignment(0, 0),
+            content=ft.Icon(ft.Icons.MORE_VERT, color="white", size=22),
+        ),
+        items=[theme_menu_item, download_menu_item, account_menu_item],
+        tooltip="Menü",
+        menu_position=ft.PopupMenuPosition.UNDER,
+        padding=0,
+    )
 
     page.appbar = ft.AppBar(
         title=ft.Text("CENG FİTNESS", weight="bold", color="white"),
         center_title=True,
         bgcolor="teal700",
+        actions=[menu_btn],
     )
 
     camera_stream = ft.Image(
@@ -297,6 +300,25 @@ def main(page: ft.Page):
         on_click=lambda e: handle_action(e),
     )
 
+    camera_frame = ft.Container(
+        content=camera_stack,
+        border_radius=20,
+        border=ft.border.all(2, "teal300")
+    )
+
+    def apply_theme():
+        dark = theme_state["dark"]
+        page.bgcolor = "#101414" if dark else None
+        page.appbar.bgcolor = "teal900" if dark else "teal700"
+        placeholder.bgcolor = "#202626" if dark else "grey200"
+        placeholder.content.color = "grey500" if dark else "grey400"
+        info_text.color = "teal200" if dark else "teal"
+        result_card.content.bgcolor = "#182222" if dark else None
+        camera_frame.border = ft.border.all(2, "teal500" if dark else "teal300")
+        menu_btn.content.bgcolor = "#505B73" if dark else "#3E475B"
+        theme_menu_item.icon = ft.Icons.LIGHT_MODE if dark else ft.Icons.DARK_MODE
+        theme_menu_item.content = "Light mode" if dark else "Dark mode"
+
     def show_idle_error(message):
         state["mode"] = "idle"
         placeholder.visible = True
@@ -312,7 +334,7 @@ def main(page: ft.Page):
         info_text.value = message
         page.update()
 
-    def display_result(resp, automatic=False):
+    def display_result(resp):
         state["mode"] = "result"
         state["poller_id"] += 1
         camera_stream.visible = False
@@ -325,19 +347,22 @@ def main(page: ft.Page):
         cal = resp.get("calories", 0)
         macros = resp.get("macros", {"protein": "0g", "karb": "0g", "yag": "0g"})
         advice = resp.get("advice", "")
+        advice_bg = "#132f3c" if theme_state["dark"] else "blue50"
+        advice_color = "blue100" if theme_state["dark"] else "blue800"
+        calorie_color = "teal200" if theme_state["dark"] else "teal700"
 
         result_card.content.content.controls = [
             ft.Text(f"{food_name} (%{conf})", size=22, weight="bold"),
             ft.Divider(height=10),
-            ft.Text(f"{cal} kcal", size=28, color="teal700", weight="bold"),
+            ft.Text(f"{cal} kcal", size=28, color=calorie_color, weight="bold"),
             ft.Row([
                 ft.Text(f"P: {macros['protein']}", color="red", weight="bold"),
                 ft.Text(f"K: {macros['karb']}", color="orange", weight="bold"),
                 ft.Text(f"Y: {macros['yag']}", color="amber", weight="bold")
             ], alignment="spaceAround"),
             ft.Container(
-                margin=ft.margin.only(top=10), padding=10, bgcolor="blue50", border_radius=10,
-                content=ft.Text(f"💡 {advice}", color="blue800", italic=True, text_align="center")
+                margin=ft.margin.only(top=10), padding=10, bgcolor=advice_bg, border_radius=10,
+                content=ft.Text(f"💡 {advice}", color=advice_color, italic=True, text_align="center")
             )
         ]
 
@@ -348,11 +373,7 @@ def main(page: ft.Page):
         action_btn.tooltip = "Yeni Tarama"
         action_btn.bgcolor = "teal"
         info_text.visible = True
-        info_text.value = (
-            f"%{conf} güvenle otomatik yakalandı. Yeni tarama için tıklayın."
-            if automatic else
-            "Yeni tarama için tıklayın."
-        )
+        info_text.value = "Yeni tarama için tıklayın."
         page.update()
 
     def start_frame_poller():
@@ -361,7 +382,6 @@ def main(page: ft.Page):
 
         def poll():
             missed_frames = 0
-            next_detect_at = time.monotonic() + 0.8
             while state["mode"] == "streaming" and state["poller_id"] == poller_id:
                 try:
                     resp = requests.get(f"{SERVER_URL}/frame", timeout=1)
@@ -370,24 +390,6 @@ def main(page: ft.Page):
                     if data.get("status") == "ok":
                         missed_frames = 0
                         camera_stream.src = f"data:image/jpeg;base64,{data['image']}"
-
-                        if time.monotonic() >= next_detect_at:
-                            next_detect_at = time.monotonic() + AUTO_DETECT_INTERVAL
-                            auto_resp = requests.get(f"{SERVER_URL}/auto_capture", timeout=8)
-                            auto_data = auto_resp.json()
-
-                            if auto_data.get("status") == "detected":
-                                if state["mode"] == "streaming" and state["poller_id"] == poller_id:
-                                    requests.get(f"{SERVER_URL}/stop", timeout=1)
-                                    display_result(auto_data, automatic=True)
-                                break
-
-                            if auto_data.get("status") == "waiting":
-                                food_name = auto_data.get("food_name", "BİLİNMİYOR")
-                                conf = auto_data.get("confidence", 0.0)
-                                if conf > 0:
-                                    info_text.value = f"Algılanıyor: {food_name} (%{conf}). %70 üstünde otomatik çeker."
-
                         page.update()
                     else:
                         missed_frames += 1
@@ -482,8 +484,10 @@ def main(page: ft.Page):
             info_text.value = "Kamerayı açmak için butona basın."
             page.update()
 
+    apply_theme()
+
     page.add(ft.Column([
-        ft.Container(content=camera_stack, border_radius=20, border=ft.border.all(2, "teal300")),
+        camera_frame,
         ft.Container(height=10),
         info_text,
         result_card,
