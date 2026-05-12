@@ -6,20 +6,33 @@ import base64
 import cv2
 from flask import Flask, Response, jsonify
 import logging
+import json
 
+# YENİ: Gemini API kütüphanesi
+import google.generativeai as genai
 
 app = Flask(__name__)
 SERVER_URL = "http://127.0.0.1:5000"
 
-#  WEB TARAYICISI GÜVENLİK İZNİ 
-# Tarayıcının kamerayı engellememesi için gereken geçiş izni
+# GEMINI API AYARLARI (Kendi API anahtarını buraya yazacaksın)
+genai.configure(api_key="AIzaSyAhzOWBt3Vb5V-kDgC7yCWMuHr-e7HKCPs")
+
+# Modelin sadece JSON formatında, uydurmadan (düşük sıcaklık) cevap vermesi için ayar
+generation_config = {
+  "temperature": 0.1,
+  "response_mime_type": "application/json",
+}
+gemini_model = genai.GenerativeModel(
+  model_name="gemini-2.5-flash",
+  generation_config=generation_config
+)
+
 @app.after_request
 def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
     return response
-# -----------------------------------------------
 
 camera_lock = threading.Lock()
 model_lock = threading.Lock()
@@ -28,39 +41,90 @@ cap = None
 is_streaming = False
 camera_error = None
 
+import os
 from ultralytics import YOLO
-logging.getLogger("ultralytics").setLevel(logging.ERROR)
 
-print("Yapay Zeka Asistanımız Yükleniyor...")
-model = YOLO("best.pt")
-print("✅ Model Hazır!")
+# 1. main.py dosyasının şu an çalıştığı klasörün tam yolunu otomatik bul
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-BESIN_DEGERLERI = {
-    "kofte": {"cal": 250, "p": "18g", "k": "10g", "y": "15g", "tavsiye": "Protein deposu, harika tercih!"},
-    "salata": {"cal": 50, "p": "1g", "k": "5g", "y": "2g", "tavsiye": "Diyet dostu, lifli ve sağlıklı."},
-    "pilav": {"cal": 300, "p": "5g", "k": "45g", "y": "10g", "tavsiye": "Yüksek karbonhidrat, enerji verir."},
-    "tavuk_durum": {"cal": 400, "p": "25g", "k": "35g", "y": "15g", "tavsiye": "Pratik ve doyurucu."}
-}
+# 2. best.pt dosyasının bu klasörün içinde olduğunu sisteme kesin olarak söyle
+model_yolu = os.path.join(BASE_DIR, "best.pt")
 
+print("YOLO Yapay Zeka Asistanımız Yükleniyor...")
+# 3. Modeli artık bu kesin yoldan yükle
+model = YOLO(model_yolu)
+print("✅ YOLO Modeli Hazır!")
+
+# YENİ: Gemini'dan anlık besin değeri çeken fonksiyon
+def get_nutrition_from_gemini(food_name):
+    prompt = f"""
+    Kullanıcı kameraya '{food_name}' gösterdi. 
+    ÇOK ÖNEMLİ DİKKAT: Besin değerlerini KESİNLİKLE 100 gram için HESAPLAMA! Türkiye'deki doyurucu, standart 1 tam porsiyon (örneğin 1 dolu tabak, 1 bütün dürüm, 1 orta boy pizza vs.) için toplam değerleri hesapla.
+    SADECE JSON formatında yanıt ver. Format EKSİKSİZ olarak şu olmalı:
+    {{
+        "cal": 450,
+        "p": "25g",
+        "k": "40g",
+        "y": "20g",
+        "tavsiye": "Bu değerler 1 standart porsiyon (yaklaşık X gram) için hesaplanmıştır. Kısa ve motive edici diyetisyen tavsiyesi."
+    }}
+    """
+    try:
+        response = gemini_model.generate_content(prompt)
+        
+        try:
+            text = response.text
+        except ValueError:
+            print("Gemini güvenlik filtresine takıldı veya boş yanıt verdi.")
+            return {"cal": "?", "p": "?", "k": "?", "y": "?", "tavsiye": "Yapay zeka güvenlik filtresine takıldı."}
+
+        import re
+        # Ne dönerse dönsün, süslü parantezler { ... } arasındaki JSON kısmını bul
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        
+        if match:
+            json_str = match.group(0)
+            data = json.loads(json_str)
+            return data
+        else:
+            print(f"JSON bulunamadı. Gelen metin: {text}")
+            return {"cal": "?", "p": "?", "k": "?", "y": "?", "tavsiye": "Model JSON formatında yanıt veremedi."}
+            
+    except Exception as e:
+        print(f"Gemini API Hatası: {e}")
+        return {"cal": "?", "p": "?", "k": "?", "y": "?", "tavsiye": "İnternet bağlantısı veya API hatası."}
 def predict_food(cap_frame):
     with model_lock:
         results = model(cap_frame)
 
     try:
-        isimler = results[0].names
-        en_iyi_tahmin_index = results[0].probs.top1
-        predicted_class = isimler[en_iyi_tahmin_index]
-
-        guven_skoru = float(results[0].probs.top1conf)
-        yuzde_skor = round(guven_skoru * 100, 1)
-    except Exception:
+        # Sınıflandırma (Classification) modeli için
+        if hasattr(results[0], 'probs') and results[0].probs is not None:
+            isimler = results[0].names
+            en_iyi_tahmin_index = results[0].probs.top1
+            predicted_class = isimler[en_iyi_tahmin_index]
+            guven_skoru = float(results[0].probs.top1conf)
+            yuzde_skor = round(guven_skoru * 100, 1)
+        # Nesne Tanıma (Object Detection) modeli için
+        elif hasattr(results[0], 'boxes') and results[0].boxes is not None and len(results[0].boxes) > 0:
+            isimler = results[0].names
+            en_iyi_tahmin_index = int(results[0].boxes.cls[0].item())
+            predicted_class = isimler[en_iyi_tahmin_index]
+            guven_skoru = float(results[0].boxes.conf[0].item())
+            yuzde_skor = round(guven_skoru * 100, 1)
+        else:
+            predicted_class = "Bilinmiyor"
+            yuzde_skor = 0.0
+    except Exception as e:
+        print(f"Tahmin Hatası: {e}")
         predicted_class = "Bilinmiyor"
         yuzde_skor = 0.0
 
-    stats = BESIN_DEGERLERI.get(
-        predicted_class,
-        {"cal": "?", "p": "?", "k": "?", "y": "?", "tavsiye": "Sistemde kayıtlı değil."}
-    )
+    # Eğer model tanıyamadıysa API'ye boşuna istek atmayalım
+    if predicted_class == "Bilinmiyor":
+        stats = {"cal": "?", "p": "?", "k": "?", "y": "?", "tavsiye": "Yiyecek tespit edilemedi veya model algılayamadı."}
+    else:
+        stats = get_nutrition_from_gemini(predicted_class)
 
     return predicted_class, yuzde_skor, stats
 
@@ -82,15 +146,19 @@ def build_capture_payload(cap_frame, status="ok"):
         "image": b64,
         "food_name": predicted_class.replace("_", " ").upper(),
         "confidence": yuzde_skor,
-        "calories": stats["cal"],
-        "macros": {"protein": stats["p"], "karb": stats["k"], "yag": stats["y"]},
-        "advice": stats["tavsiye"]
+        "calories": stats.get("cal", "?"),
+        "macros": {
+            "protein": stats.get("p", "?"), 
+            "karb": stats.get("k", "?"), 
+            "yag": stats.get("y", "?")
+        },
+        "advice": stats.get("tavsiye", "Bilgi alınamadı.")
     }
 
 def camera_thread():
     global latest_frame, cap, is_streaming, camera_error
     # Windows'ta kameranın anında açılması için CAP_DSHOW eklendi
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
 
     if not cap.isOpened():
         camera_error = "Kamera açılamadı. Kamera başka bir uygulama tarafından kullanılıyor olabilir."
@@ -499,9 +567,12 @@ def main(page: ft.Page):
 
 # sistem burada başlatılıyor.
 
+# ESKİ HALİ: app.run(host='127.0.0.1', port=5000...)
+# YENİ HALİ:
 def run_flask_app():
-    app.run(host='127.0.0.1', port=5000, threaded=True, debug=False, use_reloader=False)
-
+    # host='0.0.0.0' demek, "ağımdaki tüm cihazlar bana bağlanabilir" demektir
+    app.run(host='0.0.0.0', port=5000, threaded=True, debug=False, use_reloader=False)
+ 
 if __name__ == '__main__':
     flask_thread = threading.Thread(target=run_flask_app, daemon=True)
     flask_thread.start()
@@ -509,6 +580,7 @@ if __name__ == '__main__':
     time.sleep(1.5)
 
     try:
-        ft.run(main, view="web_browser", port=8000)
-    except:
-        ft.app(target=main, view="web_browser", port=8000)
+        # Host ayarını Flet'e de ekliyoruz
+        ft.app(target=main, view=ft.AppView.WEB_BROWSER, port=8000, host="0.0.0.0")
+    except Exception as e:
+        print("Flet Başlatma Hatası:", e)
