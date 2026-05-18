@@ -15,7 +15,7 @@ app = Flask(__name__)
 SERVER_URL = "http://127.0.0.1:5000"
 
 # GEMINI API AYARLARI (Kendi API anahtarını buraya yazacaksın)
-genai.configure(api_key="AIzaSyBq2rKjvntXPpsBLabaqLsMnJpEz_rb1wQ")
+genai.configure(api_key="asdasdsdfdsaffdsf")
 
 # Modelin sadece JSON formatında ve tam istediğimiz yapıda cevap vermesi için şema (Structured Outputs) ekliyoruz
 generation_config = {
