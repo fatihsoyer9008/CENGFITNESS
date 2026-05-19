@@ -1,1 +1,32 @@
-*.pt
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Sanal ortamlar
+venv/
+env/
+.venv/
+
+# Çalışma zamanı log dosyaları
+run.log
+run.err
+*.log
+
+# Veritabanı (kullanıcı verisi gizli kalsın)
+*.db
+*.sqlite
+*.sqlite3
+
+# Ortam değişkenleri (API anahtarları)
+.env
+.env.local
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+
+# YOLO model dosyaları (zaten branch'te değil, GitHub LFS gerekli olabilir)
+# *.pt  ← best.pt commit'lendiği için bu satırı kaldırdık
