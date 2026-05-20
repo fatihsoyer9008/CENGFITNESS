@@ -39,11 +39,12 @@ load_dotenv()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SERVER_URL = "http://127.0.0.1:5000"
 
-GEMINI_API_KEY = os.environ.get(
-    "GEMINI_API_KEY",
-    "AIzaSyBq2rKjvntXPpsBLabaqLsMnJpEz_rb1wQ"
-)
-
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise RuntimeError(
+        "GEMINI_API_KEY bulunamadı. Proje kökünde .env dosyası oluşturup "
+        ".env.example'daki gibi anahtarınızı girin."
+    )
 
 genai.configure(api_key=GEMINI_API_KEY)
 
@@ -292,6 +293,7 @@ def flet_main(page):
         "/scan":     lambda: ui_pages.build_scan_view(page, SERVER_URL),
         "/food":     lambda: ui_pages.build_food_log_view(page),
         "/exercise": lambda: ui_pages.build_exercise_view(page),
+        "/muscle":   lambda: ui_pages.build_muscle_view(page),
         "/stats":    lambda: ui_pages.build_stats_view(page),
         "/profile":  lambda: ui_pages.build_profile_view(page),
     }
@@ -348,8 +350,17 @@ def flet_main(page):
             page.views.pop()
             page.go(page.views[-1].route)
 
+    last_mobile = {"v": ui_pages.is_mobile(page)}
+
+    def on_resized(e):
+        now_mobile = ui_pages.is_mobile(page)
+        if now_mobile != last_mobile["v"]:
+            last_mobile["v"] = now_mobile
+            route_change(None)
+
     page.on_route_change = route_change
     page.on_view_pop = view_pop
+    page.on_resized = on_resized
     page.go(page.route or "/")
 
 

@@ -61,8 +61,24 @@ CREATE TABLE IF NOT EXISTS exercise_log (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS body_measurements (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         INTEGER NOT NULL,
+    weight_kg       REAL,
+    chest_cm        REAL,
+    waist_cm        REAL,
+    hip_cm          REAL,
+    arm_cm          REAL,
+    thigh_cm        REAL,
+    body_fat_pct    REAL,
+    note            TEXT,
+    logged_at       TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_food_user_date ON food_log(user_id, logged_at);
 CREATE INDEX IF NOT EXISTS idx_exercise_user_date ON exercise_log(user_id, logged_at);
+CREATE INDEX IF NOT EXISTS idx_measurements_user_date ON body_measurements(user_id, logged_at);
 """
 
 
@@ -75,6 +91,8 @@ def init_db():
             conn.execute("ALTER TABLE exercise_log ADD COLUMN sets INTEGER DEFAULT 0")
         if "reps" not in existing_cols:
             conn.execute("ALTER TABLE exercise_log ADD COLUMN reps INTEGER DEFAULT 0")
+        if "weight_kg" not in existing_cols:
+            conn.execute("ALTER TABLE exercise_log ADD COLUMN weight_kg REAL DEFAULT 0")
 
 
 def create_user(email, password_hash, salt, name, weight_kg, height_cm, age, gender):
@@ -173,16 +191,208 @@ def get_today_calories_in(user_id):
 
 
 def add_exercise_log(user_id, exercise_name, duration_min, calories_burned, met_value,
-                     sets=0, reps=0):
+                     sets=0, reps=0, weight_kg=0):
     with get_connection() as conn:
         cur = conn.execute(
             """INSERT INTO exercise_log
-                  (user_id, exercise_name, duration_min, calories_burned, met_value, sets, reps)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                  (user_id, exercise_name, duration_min, calories_burned,
+                   met_value, sets, reps, weight_kg)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (user_id, exercise_name, int(duration_min), int(calories_burned),
-             float(met_value), int(sets or 0), int(reps or 0))
+             float(met_value), int(sets or 0), int(reps or 0), float(weight_kg or 0))
         )
         return cur.lastrowid
+
+
+def estimate_1rm(weight_kg, reps):
+    if not weight_kg or not reps or reps <= 0:
+        return 0
+    return weight_kg * (1 + reps / 30.0)
+
+
+def get_personal_records(user_id):
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT exercise_name,
+                      MAX(weight_kg) AS max_weight,
+                      MAX(weight_kg * (1 + CAST(reps AS REAL) / 30.0)) AS max_1rm
+               FROM exercise_log
+               WHERE user_id = ? AND weight_kg > 0
+               GROUP BY exercise_name
+               ORDER BY max_1rm DESC""",
+            (user_id,)
+        ).fetchall()
+
+        records = []
+        for r in rows:
+            best = conn.execute(
+                """SELECT sets, reps, weight_kg, logged_at
+                   FROM exercise_log
+                   WHERE user_id = ? AND exercise_name = ? AND weight_kg > 0
+                   ORDER BY weight_kg DESC, reps DESC
+                   LIMIT 1""",
+                (user_id, r["exercise_name"])
+            ).fetchone()
+            records.append({
+                "exercise_name": r["exercise_name"],
+                "max_weight": float(r["max_weight"] or 0),
+                "max_1rm": round(float(r["max_1rm"] or 0), 1),
+                "best_reps": best["reps"] if best else 0,
+                "best_sets": best["sets"] if best else 0,
+                "best_at": best["logged_at"] if best else None,
+            })
+        return records
+
+
+def get_exercise_history(user_id, exercise_name, days=None):
+    query = """SELECT logged_at, sets, reps, weight_kg, duration_min, calories_burned
+               FROM exercise_log
+               WHERE user_id = ? AND exercise_name = ?"""
+    params = [user_id, exercise_name]
+    if days is not None:
+        query += " AND logged_at >= datetime('now', ?, 'localtime')"
+        params.append(f"-{days} days")
+    query += " ORDER BY logged_at ASC"
+    with get_connection() as conn:
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_exercise_history_range(user_id, exercise_name, start_date, end_date):
+    s = str(start_date)[:10]
+    e = str(end_date)[:10]
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT logged_at, sets, reps, weight_kg, duration_min, calories_burned
+               FROM exercise_log
+               WHERE user_id = ? AND exercise_name = ?
+                 AND date(logged_at, 'localtime') BETWEEN ? AND ?
+               ORDER BY logged_at ASC""",
+            (user_id, exercise_name, s, e)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_strength_logs_range(user_id, start_date, end_date):
+    s = str(start_date)[:10]
+    e = str(end_date)[:10]
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT exercise_name, sets, reps, weight_kg, logged_at
+               FROM exercise_log
+               WHERE user_id = ? AND weight_kg > 0
+                 AND date(logged_at, 'localtime') BETWEEN ? AND ?""",
+            (user_id, s, e)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_distinct_strength_exercises(user_id):
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT DISTINCT exercise_name
+               FROM exercise_log
+               WHERE user_id = ? AND weight_kg > 0
+               ORDER BY exercise_name""",
+            (user_id,)
+        ).fetchall()
+        return [r["exercise_name"] for r in rows]
+
+
+def get_strength_logs(user_id, days=7):
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT exercise_name, sets, reps, weight_kg, logged_at
+               FROM exercise_log
+               WHERE user_id = ? AND weight_kg > 0
+                 AND logged_at >= datetime('now', ?, 'localtime')""",
+            (user_id, f"-{days} days")
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_strength_summary(user_id, days=7):
+    with get_connection() as conn:
+        row = conn.execute(
+            """SELECT COALESCE(SUM(weight_kg * reps * sets), 0) AS volume,
+                      COALESCE(SUM(sets), 0) AS total_sets
+               FROM exercise_log
+               WHERE user_id = ? AND weight_kg > 0
+                 AND logged_at >= datetime('now', ?, 'localtime')""",
+            (user_id, f"-{days} days")
+        ).fetchone()
+
+        week_max = conn.execute(
+            """SELECT exercise_name, MAX(weight_kg) AS mw
+               FROM exercise_log
+               WHERE user_id = ? AND weight_kg > 0
+                 AND logged_at >= datetime('now', ?, 'localtime')
+               GROUP BY exercise_name""",
+            (user_id, f"-{days} days")
+        ).fetchall()
+        before_max = conn.execute(
+            """SELECT exercise_name, MAX(weight_kg) AS mw
+               FROM exercise_log
+               WHERE user_id = ? AND weight_kg > 0
+                 AND logged_at < datetime('now', ?, 'localtime')
+               GROUP BY exercise_name""",
+            (user_id, f"-{days} days")
+        ).fetchall()
+
+    before_map = {r["exercise_name"]: float(r["mw"]) for r in before_max}
+    new_prs = 0
+    top_growth = None
+    for r in week_max:
+        name = r["exercise_name"]
+        w = float(r["mw"] or 0)
+        prev = before_map.get(name, 0)
+        if w > prev:
+            new_prs += 1
+            delta = w - prev
+            if prev > 0 and (top_growth is None or delta > top_growth[1]):
+                top_growth = (name, delta, prev, w)
+
+    return {
+        "volume": float(row["volume"] or 0),
+        "sets": int(row["total_sets"] or 0),
+        "new_prs": new_prs,
+        "top_growth": top_growth,
+    }
+
+
+def add_body_measurement(user_id, weight_kg=None, chest_cm=None, waist_cm=None,
+                         hip_cm=None, arm_cm=None, thigh_cm=None,
+                         body_fat_pct=None, note=None):
+    with get_connection() as conn:
+        cur = conn.execute(
+            """INSERT INTO body_measurements
+                  (user_id, weight_kg, chest_cm, waist_cm, hip_cm,
+                   arm_cm, thigh_cm, body_fat_pct, note)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, weight_kg, chest_cm, waist_cm, hip_cm,
+             arm_cm, thigh_cm, body_fat_pct, note)
+        )
+        return cur.lastrowid
+
+
+def get_body_measurements(user_id, days=None):
+    query = "SELECT * FROM body_measurements WHERE user_id = ?"
+    params = [user_id]
+    if days is not None:
+        query += " AND logged_at >= datetime('now', ?, 'localtime')"
+        params.append(f"-{days} days")
+    query += " ORDER BY logged_at ASC"
+    with get_connection() as conn:
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_body_measurement(measurement_id, user_id):
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM body_measurements WHERE id = ? AND user_id = ?",
+            (measurement_id, user_id)
+        )
 
 
 def delete_exercise_log(log_id, user_id):
