@@ -1,0 +1,6 @@
+flet==0.25.2
+flask>=3.0
+requests>=2.31
+opencv-python>=4.8
+ultralytics>=8.0
+google-generativeai>=0.8
