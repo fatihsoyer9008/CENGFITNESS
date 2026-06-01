@@ -8,6 +8,7 @@ import requests
 import database
 import auth
 import exercises_data
+import foods_data
 
 
 PRIMARY        = "#14B8A6"
@@ -1007,16 +1008,106 @@ def build_scan_view(page, server_url):
 def build_food_log_view(page):
     user_id = page.session.get("user_id")
 
+    selected = {"food": None}
+
     food_name = text_field("Yemek adı", width=320, prefix_icon=ft.Icons.RESTAURANT)
     calories_input = text_field("Kalori (kcal)", width=320,
                                  prefix_icon=ft.Icons.LOCAL_FIRE_DEPARTMENT,
                                  keyboard_type=ft.KeyboardType.NUMBER)
-    protein_input = text_field("Protein (g)", width=320, prefix_icon=ft.Icons.SCIENCE,
+    protein_input = text_field("Protein (g)", width=150, prefix_icon=ft.Icons.SCIENCE,
                                 keyboard_type=ft.KeyboardType.NUMBER)
-    carbs_input = text_field("Karbonhidrat (g)", width=320, prefix_icon=ft.Icons.GRAIN,
+    carbs_input = text_field("Karb (g)", width=150, prefix_icon=ft.Icons.GRAIN,
                               keyboard_type=ft.KeyboardType.NUMBER)
-    fat_input = text_field("Yağ (g)", width=320, prefix_icon=ft.Icons.OPACITY,
+    fat_input = text_field("Yağ (g)", width=150, prefix_icon=ft.Icons.OPACITY,
                             keyboard_type=ft.KeyboardType.NUMBER)
+    portion_input = text_field("Adet", value="1", width=150,
+                               prefix_icon=ft.Icons.FORMAT_LIST_NUMBERED,
+                               keyboard_type=ft.KeyboardType.NUMBER)
+
+    portion_label = ft.Text("", size=11, color=TEXT_MUTED, italic=True)
+
+    def apply_portion():
+        food = selected["food"]
+        if not food:
+            return
+        try:
+            n = float((portion_input.value or "1").replace(",", "."))
+        except ValueError:
+            n = 1.0
+        if n <= 0:
+            n = 1.0
+        food_name.value = food["name"]
+        calories_input.value = str(round(food["kcal"] * n))
+        protein_input.value = f"{food['protein_g'] * n:.1f}"
+        carbs_input.value = f"{food['carbs_g'] * n:.1f}"
+        fat_input.value = f"{food['fat_g'] * n:.1f}"
+        portion_label.value = (
+            f"{n:g} {food['portion_name']} • ≈{food['portion_g'] * n:.0f} g"
+        )
+        page.update()
+
+    def clear_selection():
+        selected["food"] = None
+        portion_label.value = ""
+        portion_input.value = "1"
+        food_name.value = ""
+        calories_input.value = ""
+        protein_input.value = ""
+        carbs_input.value = ""
+        fat_input.value = ""
+
+    def on_category_change(e):
+        cat = e.control.value
+        if not cat:
+            return
+        food_picker.options = [
+            ft.dropdown.Option(f["name"]) for f in foods_data.get_by_category(cat)
+        ]
+        food_picker.value = None
+        selected["food"] = None
+        portion_label.value = ""
+        page.update()
+
+    def on_food_pick(e):
+        name = e.control.value
+        if not name:
+            return
+        food = foods_data.find_by_name(name)
+        if not food:
+            return
+        selected["food"] = food
+        portion_input.value = "1"
+        apply_portion()
+
+    def on_portion_change(e):
+        if selected["food"]:
+            apply_portion()
+
+    portion_input.on_change = on_portion_change
+
+    category_picker = ft.Dropdown(
+        label="Kategori",
+        on_change=on_category_change,
+        border_color=BORDER_DARK, focused_border_color=PRIMARY,
+        bgcolor=SURFACE_DARK_2, border_radius=12,
+        content_padding=ft.padding.all(14),
+        label_style=ft.TextStyle(color=TEXT_SECONDARY),
+        text_style=ft.TextStyle(color=TEXT_PRIMARY),
+        width=320,
+        options=[ft.dropdown.Option(c) for c in foods_data.get_categories()],
+    )
+
+    food_picker = ft.Dropdown(
+        label="Yemek seç",
+        on_change=on_food_pick,
+        border_color=BORDER_DARK, focused_border_color=PRIMARY,
+        bgcolor=SURFACE_DARK_2, border_radius=12,
+        content_padding=ft.padding.all(14),
+        label_style=ft.TextStyle(color=TEXT_SECONDARY),
+        text_style=ft.TextStyle(color=TEXT_PRIMARY),
+        width=320,
+        options=[],
+    )
 
     def close_dialog(e=None):
         dialog.open = False
@@ -1034,11 +1125,10 @@ def build_food_log_view(page):
                 protein_g=protein_input.value or 0,
                 carbs_g=carbs_input.value or 0,
                 fat_g=fat_input.value or 0,
-                source="manual",
+                source="library" if selected["food"] else "manual",
             )
             show_snack(page, "Eklendi!", SUCCESS)
-            for f in [food_name, calories_input, protein_input, carbs_input, fat_input]:
-                f.value = ""
+            clear_selection()
             close_dialog()
             refresh_view(page, "/food")
         except Exception as ex:
@@ -1051,8 +1141,17 @@ def build_food_log_view(page):
         content=ft.Container(
             width=360,
             content=ft.Column([
-                food_name, calories_input, protein_input, carbs_input, fat_input,
-            ], spacing=10, tight=True),
+                ft.Text("Hazır listeden seç", size=12, color=TEXT_SECONDARY, weight="w500"),
+                category_picker,
+                food_picker,
+                ft.Row([portion_input], spacing=10),
+                portion_label,
+                ft.Divider(height=20, color=BORDER_DARK),
+                ft.Text("veya manuel düzenle", size=12, color=TEXT_SECONDARY, weight="w500"),
+                food_name,
+                calories_input,
+                ft.Row([protein_input, carbs_input, fat_input], spacing=10, wrap=True),
+            ], spacing=10, tight=True, scroll=ft.ScrollMode.AUTO, height=480),
         ),
         actions=[
             ft.TextButton("İptal", on_click=close_dialog,
@@ -1064,6 +1163,10 @@ def build_food_log_view(page):
     )
 
     def open_add_dialog(e):
+        clear_selection()
+        category_picker.value = None
+        food_picker.value = None
+        food_picker.options = []
         page.dialog = dialog
         dialog.open = True
         page.update()
@@ -1080,14 +1183,16 @@ def build_food_log_view(page):
     today_total = sum(l["calories"] for l in logs_today)
 
     def render_log_row(log):
-        is_camera = log["source"] == "camera"
+        src = log.get("source") or "manual"
+        if src == "camera":
+            icon, icon_color = ft.Icons.CAMERA_ALT, PRIMARY_LIGHT
+        elif src == "library":
+            icon, icon_color = ft.Icons.MENU_BOOK, SUCCESS
+        else:
+            icon, icon_color = ft.Icons.EDIT_NOTE, WARNING
         return ft.Container(
             content=ft.Row([
-                ft.Icon(
-                    ft.Icons.CAMERA_ALT if is_camera else ft.Icons.EDIT_NOTE,
-                    color=PRIMARY_LIGHT if is_camera else WARNING,
-                    size=22,
-                ),
+                ft.Icon(icon, color=icon_color, size=22),
                 ft.Column([
                     ft.Text(log["food_name"], size=14, weight="bold", color=TEXT_PRIMARY),
                     ft.Text(
