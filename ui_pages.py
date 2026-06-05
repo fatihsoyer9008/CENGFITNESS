@@ -1,5 +1,6 @@
+import base64
+import os
 import threading
-import time
 from datetime import datetime, timedelta
 
 import flet as ft
@@ -395,6 +396,9 @@ def build_login_view(page):
         show_snack(page, f"Hoş geldin, {user['name']}!", SUCCESS)
         page.go("/")
 
+    email.on_submit = do_login
+    password.on_submit = do_login
+
     return ft.View(
         route="/login",
         bgcolor=BG_DARK,
@@ -496,6 +500,9 @@ def build_register_view(page):
         page.session.set("user_name", (name.value or "").strip())
         show_snack(page, "Kayıt başarılı! Hoş geldin!", SUCCESS)
         page.go("/")
+
+    for f in (name, email, password, weight, height, age):
+        f.on_submit = do_register
 
     return ft.View(
         route="/register",
@@ -718,85 +725,84 @@ def build_dashboard_view(page):
     return shell(page, "/", "Ana Sayfa", "Günlük özetin ve hızlı erişim", body)
 
 
-def build_scan_view(page, server_url):
+def build_scan_view(page, server_url, upload_dir):
     user_id = page.session.get("user_id")
+    is_phone = is_mobile(page)
 
-    TRANSPARENT_PIXEL = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
-    state = {"mode": "idle", "poller_id": 0}
+    PICK_LABEL = "Fotoğraf Çek" if is_phone else "Dosya / Galeri"
+    PICK_ICON = ft.Icons.PHOTO_CAMERA if is_phone else ft.Icons.PHOTO_LIBRARY
 
-    camera_stream = ft.Image(
-        src=f"data:image/png;base64,{TRANSPARENT_PIXEL}",
-        width=340, height=340, fit="cover", border_radius=20, visible=False,
-        gapless_playback=True,
-    )
+    state = {"image_b64": None, "pending_file": None}
 
     placeholder = ft.Container(
         width=340, height=340, bgcolor=SURFACE_DARK_2, border_radius=20,
-        content=ft.Column([
-            ft.Icon(ft.Icons.RESTAURANT, size=80, color=TEXT_MUTED),
-            ft.Text("Kamerayı açmak için aşağıdaki butona bas",
-                    color=TEXT_MUTED, size=12),
-        ], alignment="center", horizontal_alignment="center", spacing=12),
         alignment=ft.alignment.center,
+        content=ft.Column([
+            ft.Icon(ft.Icons.PHOTO_CAMERA, size=80, color=TEXT_MUTED),
+            ft.Text("Fotoğraf çek veya galeriden seç", color=TEXT_MUTED, size=12),
+        ], alignment="center", horizontal_alignment="center", spacing=12),
     )
 
-    frozen_image = ft.Image(
-        src=f"data:image/png;base64,{TRANSPARENT_PIXEL}",
-        width=340, height=340, fit="cover", border_radius=20, visible=False,
-        gapless_playback=True,
+    preview_image = ft.Image(
+        width=340, height=340, fit="cover", border_radius=20,
+        visible=False, gapless_playback=True,
     )
 
-    analyze_overlay = ft.Container(
+    overlay_label = ft.Text("Yapay zeka analiz ediyor...", color="white", weight="bold")
+    busy_overlay = ft.Container(
         width=340, height=340, bgcolor="#CC000000",
         border_radius=20, alignment=ft.alignment.center, visible=False,
         content=ft.Column([
             ft.ProgressRing(color=PRIMARY_LIGHT, width=40, height=40),
             ft.Container(height=10),
-            ft.Text("Yapay zeka analiz ediyor...", color="white", weight="bold"),
+            overlay_label,
         ], alignment="center", horizontal_alignment="center"),
     )
 
-    camera_stack = ft.Stack([placeholder, camera_stream, frozen_image, analyze_overlay],
-                            width=340, height=340)
-
-    info_text = ft.Text("Hazır! Kamerayı açabilirsin.", color=TEXT_SECONDARY, size=13)
+    info_text = ft.Text("", color=TEXT_SECONDARY, size=13, text_align="center")
     result_card_container = ft.Container(visible=False)
 
-    action_btn = ft.FilledButton(
-        text="Kamerayı Aç",
-        icon=ft.Icons.VIDEOCAM,
-        on_click=lambda e: handle_action(e),
-        style=ft.ButtonStyle(
-            bgcolor=PRIMARY, color="white",
-            padding=ft.padding.symmetric(horizontal=30, vertical=20),
-            shape=ft.RoundedRectangleBorder(radius=14),
-            text_style=ft.TextStyle(weight="bold", size=15),
-        ),
-    )
+    def set_info(msg, color=TEXT_SECONDARY):
+        info_text.value = msg
+        info_text.color = color
 
-    def show_idle_error(message):
-        state["mode"] = "idle"
+    def show_busy(label):
+        overlay_label.value = label
+        busy_overlay.visible = True
+
+    def hide_busy():
+        busy_overlay.visible = False
+
+    def reset_to_idle(msg=None):
+        state["image_b64"] = None
+        state["pending_file"] = None
         placeholder.visible = True
-        camera_stream.visible = False
-        frozen_image.visible = False
-        analyze_overlay.visible = False
+        preview_image.visible = False
+        hide_busy()
         result_card_container.visible = False
-        action_btn.disabled = False
-        action_btn.icon = ft.Icons.VIDEOCAM
-        action_btn.text = "Kamerayı Aç"
-        action_btn.style.bgcolor = PRIMARY
-        info_text.value = message
-        info_text.color = DANGER
+        pick_btn.disabled = False
+        pick_btn.text = PICK_LABEL
+        pick_btn.icon = PICK_ICON
+        analyze_btn.visible = False
+        analyze_btn.disabled = False
+        if msg:
+            set_info(msg)
+        page.update()
+
+    def show_error(msg):
+        hide_busy()
+        pick_btn.disabled = False
+        analyze_btn.disabled = False
+        set_info(msg, DANGER)
         page.update()
 
     def render_result_card(resp):
         food_name = resp.get("food_name", "BİLİNMİYOR")
-        conf = resp.get("confidence", 0.0)
         cal = resp.get("calories", 0)
-        macros = resp.get("macros", {"protein": "0g", "karb": "0g", "yag": "0g"})
+        macros = resp.get("macros", {})
         advice = resp.get("advice", "")
 
-        def save_to_log(e):
+        def save(e):
             try:
                 database.add_food_log(
                     user_id=user_id, food_name=food_name, calories=cal,
@@ -806,193 +812,227 @@ def build_scan_view(page, server_url):
                     source="camera",
                 )
                 show_snack(page, f"'{food_name}' günlüğüne eklendi!", SUCCESS)
-                result_card_container.visible = False
-                show_idle_error("Yeni tarama için kamerayı aç.")
-                info_text.color = TEXT_SECONDARY
+                reset_to_idle("Yeni tarama için butona bas.")
             except Exception as ex:
                 show_snack(page, f"Kayıt hatası: {ex}", DANGER)
 
-        def discard(e):
-            result_card_container.visible = False
-            show_idle_error("Tarama iptal edildi.")
-            info_text.color = TEXT_SECONDARY
-
-        result_card_container.content = card(
-            ft.Column([
-                ft.Row([
-                    ft.Column([
-                        ft.Text(food_name, size=20, weight="bold", color=TEXT_PRIMARY),
-                        ft.Text(f"Güven: %{conf}", size=12, color=TEXT_MUTED),
-                    ], spacing=2, expand=True),
-                    ft.Container(
-                        content=ft.Column([
-                            ft.Text(str(cal), size=24, weight="bold", color=PRIMARY_LIGHT),
-                            ft.Text("kcal", size=10, color=TEXT_MUTED),
-                        ], horizontal_alignment="center", spacing=0),
-                        bgcolor=f"{PRIMARY}22",
-                        padding=ft.padding.symmetric(horizontal=14, vertical=8),
-                        border_radius=12,
-                    ),
-                ]),
-                ft.Container(height=10),
-                ft.Row([
-                    macro_chip("Protein", macros.get('protein', '?'), PROTEIN_COLOR),
-                    macro_chip("Karb", macros.get('karb', '?'), CARB_COLOR),
-                    macro_chip("Yağ", macros.get('yag', '?'), FAT_COLOR),
-                ], spacing=8),
-                ft.Container(height=8),
+        result_card_container.content = card(ft.Column([
+            ft.Row([
+                ft.Column([
+                    ft.Text(food_name, size=20, weight="bold", color=TEXT_PRIMARY),
+                    ft.Text(f"Güven: %{resp.get('confidence', 0)}",
+                            size=12, color=TEXT_MUTED),
+                ], spacing=2, expand=True),
                 ft.Container(
-                    content=ft.Row([
-                        ft.Icon(ft.Icons.LIGHTBULB, color=INFO, size=18),
-                        ft.Text(advice, color=TEXT_SECONDARY, size=12, italic=True, expand=True),
-                    ], vertical_alignment="start", spacing=8),
-                    bgcolor=f"{INFO}11",
-                    padding=12, border_radius=10,
+                    content=ft.Column([
+                        ft.Text(str(cal), size=24, weight="bold", color=PRIMARY_LIGHT),
+                        ft.Text("kcal", size=10, color=TEXT_MUTED),
+                    ], horizontal_alignment="center", spacing=0),
+                    bgcolor=f"{PRIMARY}22", border_radius=12,
+                    padding=ft.padding.symmetric(horizontal=14, vertical=8),
                 ),
-                ft.Container(height=10),
-                ft.Row([
-                    outlined_button("İptal", discard, icon=ft.Icons.CLOSE),
-                    primary_button("Günlüğe Ekle", save_to_log, icon=ft.Icons.ADD),
-                ], alignment="spaceBetween"),
-            ], spacing=4),
-            width=520,
-        )
+            ]),
+            ft.Container(height=10),
+            ft.Row([
+                macro_chip("Protein", macros.get("protein", "?"), PROTEIN_COLOR),
+                macro_chip("Karb", macros.get("karb", "?"), CARB_COLOR),
+                macro_chip("Yağ", macros.get("yag", "?"), FAT_COLOR),
+            ], spacing=8),
+            ft.Container(height=8),
+            ft.Container(
+                bgcolor=f"{INFO}11", padding=12, border_radius=10,
+                content=ft.Row([
+                    ft.Icon(ft.Icons.LIGHTBULB, color=INFO, size=18),
+                    ft.Text(advice, color=TEXT_SECONDARY, size=12, italic=True, expand=True),
+                ], vertical_alignment="start", spacing=8),
+            ),
+            ft.Container(height=10),
+            ft.Row([
+                outlined_button("İptal", lambda e: reset_to_idle("Tarama iptal edildi."),
+                                icon=ft.Icons.CLOSE),
+                primary_button("Günlüğe Ekle", save, icon=ft.Icons.ADD),
+            ], alignment="spaceBetween"),
+        ], spacing=4), width=520)
         result_card_container.visible = True
 
     def display_result(resp):
-        state["mode"] = "result"
-        state["poller_id"] += 1
-        camera_stream.visible = False
-        placeholder.visible = False
-        frozen_image.src = f"data:image/jpeg;base64,{resp['image']}"
-        frozen_image.visible = True
-        analyze_overlay.visible = False
+        hide_busy()
         render_result_card(resp)
-        action_btn.disabled = False
-        action_btn.icon = ft.Icons.REPLAY
-        action_btn.text = "Yeni Tarama"
-        action_btn.style.bgcolor = PRIMARY
-        info_text.value = "Sonuç hazır. Günlüğüne eklemek için 'Günlüğe Ekle' butonuna bas."
-        info_text.color = TEXT_SECONDARY
+        pick_btn.disabled = False
+        pick_btn.text = "Yeni Tarama"
+        pick_btn.icon = ft.Icons.REPLAY
+        analyze_btn.visible = False
+        set_info("Sonuç hazır. 'Günlüğe Ekle' ile kaydet.")
         page.update()
 
-    def start_frame_poller():
-        state["poller_id"] += 1
-        poller_id = state["poller_id"]
+    def send_for_analysis():
+        if not state["image_b64"]:
+            show_error("Önce bir fotoğraf seç.")
+            return
 
-        def poll():
-            missed = 0
-            while state["mode"] == "streaming" and state["poller_id"] == poller_id:
-                if page.route != "/scan":
-                    try:
-                        requests.get(f"{server_url}/stop", timeout=1)
-                    except Exception:
-                        pass
-                    return
-                try:
-                    resp = requests.get(f"{server_url}/frame", timeout=1)
-                    data = resp.json()
-                    if data.get("status") == "ok":
-                        missed = 0
-                        camera_stream.src = f"data:image/jpeg;base64,{data['image']}"
-                        page.update()
-                    else:
-                        missed += 1
-                        if missed >= 30:
-                            try:
-                                requests.get(f"{server_url}/stop", timeout=1)
-                            except Exception:
-                                pass
-                            show_idle_error(data.get("message", "Kamera hazır değil."))
-                            break
-                except Exception:
-                    missed += 1
-                    if missed >= 30:
-                        try:
-                            requests.get(f"{server_url}/stop", timeout=1)
-                        except Exception:
-                            pass
-                        show_idle_error("Kameradan görüntü alınamadı.")
-                        break
-                time.sleep(0.08)
+        pick_btn.disabled = True
+        analyze_btn.disabled = True
+        show_busy("Yapay zeka analiz ediyor...")
+        set_info("Analiz birkaç saniye sürebilir...")
+        page.update()
 
-        threading.Thread(target=poll, daemon=True).start()
-
-    def handle_action(e):
-        if state["mode"] == "idle":
+        def worker():
             try:
-                requests.get(f"{server_url}/start", timeout=2)
-                state["mode"] = "streaming"
-                placeholder.visible = False
-                camera_stream.visible = True
-                camera_stream.src = f"data:image/png;base64,{TRANSPARENT_PIXEL}"
-                frozen_image.visible = False
-                analyze_overlay.visible = False
-                result_card_container.visible = False
-                action_btn.icon = ft.Icons.CAMERA
-                action_btn.text = "Fotoğraf Çek"
-                action_btn.style.bgcolor = DANGER
-                info_text.value = "Yemeği çerçeveye al ve fotoğraf çek."
-                info_text.color = TEXT_SECONDARY
-                page.update()
-                start_frame_poller()
+                resp = requests.post(
+                    f"{server_url}/analyze",
+                    json={"image": state["image_b64"]},
+                    timeout=45,
+                ).json()
+                if resp.get("status") == "ok":
+                    if resp.get("image"):
+                        preview_image.src = f"data:image/jpeg;base64,{resp['image']}"
+                    display_result(resp)
+                else:
+                    show_error(resp.get("message", "Analiz başarısız."))
+            except requests.Timeout:
+                show_error("Sunucu yanıt vermedi (zaman aşımı).")
             except Exception as ex:
-                show_idle_error(f"Kamera başlatılamadı: {ex}")
+                show_error(f"Hata: {ex}")
 
-        elif state["mode"] == "streaming":
-            state["mode"] = "analyzing"
-            action_btn.disabled = True
-            analyze_overlay.visible = True
-            page.update()
+        threading.Thread(target=worker, daemon=True).start()
 
-            def process():
-                try:
-                    resp = requests.get(f"{server_url}/capture", timeout=20).json()
-                    requests.get(f"{server_url}/stop", timeout=2)
-                    camera_stream.visible = False
-                    if resp.get("status") == "ok":
-                        display_result(resp)
-                    else:
-                        show_idle_error(resp.get("message", "Yakalanamadı."))
-                except Exception as ex:
-                    try:
-                        requests.get(f"{server_url}/stop", timeout=2)
-                    except Exception:
-                        pass
-                    show_idle_error(f"Hata: {ex}")
+    def load_file_bytes(path):
+        try:
+            with open(path, "rb") as fh:
+                raw = fh.read()
+        except Exception as ex:
+            show_error(f"Dosya okunamadı: {ex}")
+            return
+        try:
+            os.remove(path)
+        except Exception:
+            pass
 
-            threading.Thread(target=process, daemon=True).start()
+        b64 = base64.b64encode(raw).decode("utf-8")
+        state["image_b64"] = b64
+        placeholder.visible = False
+        preview_image.src = f"data:image/jpeg;base64,{b64}"
+        preview_image.visible = True
+        hide_busy()
+        result_card_container.visible = False
+        analyze_btn.visible = True
+        analyze_btn.disabled = False
+        pick_btn.text = "Başka Fotoğraf"
+        pick_btn.icon = ft.Icons.REFRESH
+        set_info("Fotoğraf hazır. 'Analiz Et' butonuna basabilirsin.")
+        page.update()
 
-        elif state["mode"] == "result":
-            state["mode"] = "idle"
-            state["poller_id"] += 1
-            frozen_image.visible = False
-            camera_stream.visible = False
-            analyze_overlay.visible = False
-            placeholder.visible = True
-            result_card_container.visible = False
-            action_btn.icon = ft.Icons.VIDEOCAM
-            action_btn.text = "Kamerayı Aç"
-            action_btn.style.bgcolor = PRIMARY
-            info_text.value = "Kamerayı açmak için butona bas."
-            info_text.color = TEXT_SECONDARY
-            page.update()
+    def on_file_picked(e: ft.FilePickerResultEvent):
+        if not e.files:
+            return
+        f = e.files[0]
 
-    camera_frame = ft.Container(
-        content=camera_stack,
-        border_radius=20,
-        border=ft.border.all(2, PRIMARY_DARK),
+        if f.path and os.path.exists(f.path):
+            load_file_bytes(f.path)
+            return
+
+        safe_name = f.name.replace("\\", "_").replace("/", "_")
+        state["pending_file"] = safe_name
+        try:
+            upload_url = page.get_upload_url(safe_name, 120)
+        except Exception as ex:
+            show_error(f"Yükleme adresi alınamadı: {ex}")
+            return
+
+        placeholder.visible = False
+        pick_btn.disabled = True
+        show_busy("Fotoğraf yükleniyor...")
+        set_info("Fotoğraf sunucuya yükleniyor...")
+        page.update()
+
+        file_picker.upload([ft.FilePickerUploadFile(name=f.name, upload_url=upload_url)])
+
+    def on_upload(e: ft.FilePickerUploadEvent):
+        if e.error:
+            show_error(f"Yükleme hatası: {e.error}")
+            state["pending_file"] = None
+            return
+        if e.progress is None or e.progress < 1:
+            return
+
+        name = state.pop("pending_file", None) or e.file_name
+        path = os.path.join(upload_dir, name)
+        if not os.path.exists(path):
+            path = os.path.join(upload_dir, e.file_name)
+        if not os.path.exists(path):
+            show_error("Yüklenen dosya bulunamadı.")
+            return
+        load_file_bytes(path)
+
+    file_picker = ft.FilePicker(on_result=on_file_picked, on_upload=on_upload)
+    page.overlay[:] = [ov for ov in page.overlay if not isinstance(ov, ft.FilePicker)]
+    page.overlay.append(file_picker)
+
+    def open_picker(e):
+        if result_card_container.visible:
+            reset_to_idle()
+        file_picker.pick_files(
+            allow_multiple=False,
+            file_type=ft.FilePickerFileType.IMAGE,
+        )
+
+    def open_camera_popup(e):
+        if not user_id:
+            show_snack(page, "Önce giriş yap", DANGER)
+            return
+        page.launch_url(
+            f"/camera-page?user_id={user_id}",
+            web_window_name="cengfit_camera",
+            web_popup_window=True,
+            window_width=440, window_height=760,
+        )
+
+    def scan_btn(text, icon, on_click, bg, visible=True):
+        return ft.FilledButton(
+            text=text, icon=icon, on_click=on_click, visible=visible,
+            style=ft.ButtonStyle(
+                bgcolor=bg, color="white",
+                padding=ft.padding.symmetric(horizontal=24, vertical=18),
+                shape=ft.RoundedRectangleBorder(radius=14),
+                text_style=ft.TextStyle(weight="bold", size=14),
+            ),
+        )
+
+    pick_btn = scan_btn(PICK_LABEL, PICK_ICON, open_picker, PRIMARY)
+    live_btn = scan_btn("Kamerayı Aç", ft.Icons.VIDEOCAM, open_camera_popup,
+                        ACCENT, visible=not is_phone)
+    analyze_btn = scan_btn("Analiz Et", ft.Icons.AUTO_AWESOME,
+                           lambda e: send_for_analysis(), ACCENT, visible=False)
+
+    preview_frame = ft.Container(
+        content=ft.Stack([placeholder, preview_image, busy_overlay],
+                         width=340, height=340),
+        border_radius=20, border=ft.border.all(2, PRIMARY_DARK),
+    )
+
+    set_info(
+        "Butona basınca telefonun 'kamera' veya 'galeri' seçeneği çıkar."
+        if is_phone else
+        "Kameradan çek ya da galerideki fotoğrafı seç."
+    )
+
+    button_row = (
+        ft.Row([pick_btn], alignment="center")
+        if is_phone else
+        ft.Row([live_btn, pick_btn], alignment="center", spacing=10, wrap=True)
     )
 
     body = [
         ft.Container(
             alignment=ft.alignment.top_center,
             content=ft.Column([
-                camera_frame,
+                preview_frame,
                 ft.Container(height=14),
                 info_text,
                 ft.Container(height=14),
-                action_btn,
+                button_row,
+                ft.Container(height=8),
+                ft.Row([analyze_btn], alignment="center"),
                 ft.Container(height=20),
                 result_card_container,
                 ft.Container(height=40),
@@ -1001,7 +1041,7 @@ def build_scan_view(page, server_url):
     ]
 
     return shell(page, "/scan", "Yemek Tara",
-                 "Yemeği kameraya tut, kalori ve makro değerleri otomatik gelir",
+                 "Fotoğraf çek ya da galeriden seç, kalori ve makroyu otomatik hesaplayalım",
                  body)
 
 
