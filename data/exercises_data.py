@@ -1,3 +1,5 @@
+# egzersiz listesi ve MET katsayilari
+# kalori hesabi: MET x kilo x sure(saat)
 EXERCISES = [
     # Kardiyo
     {"name": "Yürüyüş (3.5 km/s)",          "category": "Kardiyo", "met": 2.8,  "icon": "directions_walk"},
@@ -207,6 +209,7 @@ EXERCISES = [
 
 
 def get_categories():
+    # kategori listesi, eklenme sirasiyla
     seen = []
     for ex in EXERCISES:
         if ex["category"] not in seen:
@@ -215,10 +218,12 @@ def get_categories():
 
 
 def get_by_category(category):
+    # secilen kategorideki hareketler
     return [ex for ex in EXERCISES if ex["category"] == category]
 
 
 def find_by_name(name):
+    # tam ad eslesmesiyle hareket bulur
     for ex in EXERCISES:
         if ex["name"] == name:
             return ex
@@ -226,4 +231,5 @@ def find_by_name(name):
 
 
 def calculate_calories(met, weight_kg, duration_min):
+    # yakilan kalori = MET x kilo x sure(saat)
     return int(round(met * weight_kg * (duration_min / 60.0)))

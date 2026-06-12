@@ -4,12 +4,14 @@ import re
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "cengfitness.db")
+# veritabani dosyasi proje kokunde duruyor (bu dosya backend/ icinde)
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB_PATH = os.path.join(ROOT_DIR, "cengfitness.db")
 
 
 @contextmanager
 def get_connection():
+    # her sorgu icin yeni baglanti aciyoruz, with bloğu bitince otomatik commit + kapanma
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -83,8 +85,10 @@ CREATE INDEX IF NOT EXISTS idx_measurements_user_date ON body_measurements(user_
 
 
 def init_db():
+    # tablolari olusturur, eksik kolonlari sonradan ekler
     with get_connection() as conn:
         conn.executescript(SCHEMA_SQL)
+        # eski veritabanlarinda set/tekrar/agirlik kolonlari yoktu, varsa dokunmadan ekle
         cur = conn.execute("PRAGMA table_info(exercise_log)")
         existing_cols = [row["name"] for row in cur.fetchall()]
         if "sets" not in existing_cols:
@@ -96,6 +100,7 @@ def init_db():
 
 
 def create_user(email, password_hash, salt, name, weight_kg, height_cm, age, gender):
+    # yeni kullanici satiri ekler, id'sini doner
     with get_connection() as conn:
         cur = conn.execute(
             """INSERT INTO users (email, password_hash, salt, name, weight_kg, height_cm, age, gender)
@@ -106,6 +111,7 @@ def create_user(email, password_hash, salt, name, weight_kg, height_cm, age, gen
 
 
 def get_user_by_email(email):
+    # girise gore kullaniciyi getirir (yoksa None)
     with get_connection() as conn:
         row = conn.execute(
             "SELECT * FROM users WHERE email = ?",
@@ -115,12 +121,14 @@ def get_user_by_email(email):
 
 
 def get_user_by_id(user_id):
+    # id ile kullaniciyi getirir (yoksa None)
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         return dict(row) if row else None
 
 
 def update_user_profile(user_id, name=None, weight_kg=None, height_cm=None, age=None, gender=None):
+    # sadece dolu gelen alanlari gunceller
     fields, values = [], []
     for key, val in [("name", name), ("weight_kg", weight_kg), ("height_cm", height_cm),
                      ("age", age), ("gender", gender)]:
@@ -134,6 +142,7 @@ def update_user_profile(user_id, name=None, weight_kg=None, height_cm=None, age=
         conn.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", values)
 
 
+# gemini bazen "25g" gibi string dondurdugu icin sayiyi metinden ayikliyoruz
 def _parse_grams(value):
     if value is None:
         return 0.0
@@ -144,6 +153,7 @@ def _parse_grams(value):
 
 
 def _parse_calories(value):
+    # kaloriyi sayiya cevirir, '?' gelirse 0
     if value is None or value == "?":
         return 0
     if isinstance(value, (int, float)):
@@ -153,6 +163,7 @@ def _parse_calories(value):
 
 
 def add_food_log(user_id, food_name, calories, protein_g=0, carbs_g=0, fat_g=0, source="manual"):
+    # yemek gunlugune kayit ekler
     with get_connection() as conn:
         cur = conn.execute(
             """INSERT INTO food_log (user_id, food_name, calories, protein_g, carbs_g, fat_g, source)
@@ -164,11 +175,13 @@ def add_food_log(user_id, food_name, calories, protein_g=0, carbs_g=0, fat_g=0, 
 
 
 def delete_food_log(log_id, user_id):
+    # kullanicinin kendi yemek kaydini siler
     with get_connection() as conn:
         conn.execute("DELETE FROM food_log WHERE id = ? AND user_id = ?", (log_id, user_id))
 
 
 def get_food_logs(user_id, days=None):
+    # yemek kayitlari, istenirse son X gunle sinirli
     query = "SELECT * FROM food_log WHERE user_id = ?"
     params = [user_id]
     if days is not None:
@@ -181,6 +194,7 @@ def get_food_logs(user_id, days=None):
 
 
 def get_today_calories_in(user_id):
+    # bugun alinan toplam kalori
     with get_connection() as conn:
         row = conn.execute(
             """SELECT COALESCE(SUM(calories), 0) AS total FROM food_log
@@ -192,6 +206,7 @@ def get_today_calories_in(user_id):
 
 def add_exercise_log(user_id, exercise_name, duration_min, calories_burned, met_value,
                      sets=0, reps=0, weight_kg=0):
+    # egzersiz kaydi ekler (set/tekrar/agirlik dahil)
     with get_connection() as conn:
         cur = conn.execute(
             """INSERT INTO exercise_log
@@ -205,12 +220,14 @@ def add_exercise_log(user_id, exercise_name, duration_min, calories_burned, met_
 
 
 def estimate_1rm(weight_kg, reps):
+    # Epley formulu: tek tekrarda kaldirabilecegin tahmini maksimum
     if not weight_kg or not reps or reps <= 0:
         return 0
     return weight_kg * (1 + reps / 30.0)
 
 
 def get_personal_records(user_id):
+    # her hareket icin en yuksek agirlik ve tahmini 1RM, en iyi set detayiyla
     with get_connection() as conn:
         rows = conn.execute(
             """SELECT exercise_name,
@@ -245,6 +262,7 @@ def get_personal_records(user_id):
 
 
 def get_exercise_history(user_id, exercise_name, days=None):
+    # tek hareketin gecmis kayitlari (eski->yeni)
     query = """SELECT logged_at, sets, reps, weight_kg, duration_min, calories_burned
                FROM exercise_log
                WHERE user_id = ? AND exercise_name = ?"""
@@ -259,6 +277,7 @@ def get_exercise_history(user_id, exercise_name, days=None):
 
 
 def get_exercise_history_range(user_id, exercise_name, start_date, end_date):
+    # tek hareketin iki tarih arasi kayitlari
     s = str(start_date)[:10]
     e = str(end_date)[:10]
     with get_connection() as conn:
@@ -274,6 +293,7 @@ def get_exercise_history_range(user_id, exercise_name, start_date, end_date):
 
 
 def get_strength_logs_range(user_id, start_date, end_date):
+    # iki tarih arasindaki agirlikli kayitlar
     s = str(start_date)[:10]
     e = str(end_date)[:10]
     with get_connection() as conn:
@@ -288,6 +308,7 @@ def get_strength_logs_range(user_id, start_date, end_date):
 
 
 def get_distinct_strength_exercises(user_id):
+    # agirlik girilen hareketlerin isim listesi
     with get_connection() as conn:
         rows = conn.execute(
             """SELECT DISTINCT exercise_name
@@ -300,6 +321,7 @@ def get_distinct_strength_exercises(user_id):
 
 
 def get_strength_logs(user_id, days=7):
+    # son X gunun agirlikli kayitlari
     with get_connection() as conn:
         rows = conn.execute(
             """SELECT exercise_name, sets, reps, weight_kg, logged_at
@@ -312,6 +334,7 @@ def get_strength_logs(user_id, days=7):
 
 
 def get_strength_summary(user_id, days=7):
+    # dashboard ozeti: donem toplam hacmi, set sayisi ve kirilan rekorlar
     with get_connection() as conn:
         row = conn.execute(
             """SELECT COALESCE(SUM(weight_kg * reps * sets), 0) AS volume,
@@ -339,6 +362,7 @@ def get_strength_summary(user_id, days=7):
             (user_id, f"-{days} days")
         ).fetchall()
 
+    # donem ici maksimum, oncesindeki maksimumu gectiyse yeni rekor sayilir
     before_map = {r["exercise_name"]: float(r["mw"]) for r in before_max}
     new_prs = 0
     top_growth = None
@@ -363,6 +387,7 @@ def get_strength_summary(user_id, days=7):
 def add_body_measurement(user_id, weight_kg=None, chest_cm=None, waist_cm=None,
                          hip_cm=None, arm_cm=None, thigh_cm=None,
                          body_fat_pct=None, note=None):
+    # vucut olcumu kaydeder (bos alanlar None kalir)
     with get_connection() as conn:
         cur = conn.execute(
             """INSERT INTO body_measurements
@@ -376,6 +401,7 @@ def add_body_measurement(user_id, weight_kg=None, chest_cm=None, waist_cm=None,
 
 
 def get_body_measurements(user_id, days=None):
+    # vucut olcumleri, istenirse son X gunle sinirli
     query = "SELECT * FROM body_measurements WHERE user_id = ?"
     params = [user_id]
     if days is not None:
@@ -388,6 +414,7 @@ def get_body_measurements(user_id, days=None):
 
 
 def delete_body_measurement(measurement_id, user_id):
+    # kullanicinin kendi olcumunu siler
     with get_connection() as conn:
         conn.execute(
             "DELETE FROM body_measurements WHERE id = ? AND user_id = ?",
@@ -396,11 +423,13 @@ def delete_body_measurement(measurement_id, user_id):
 
 
 def delete_exercise_log(log_id, user_id):
+    # kullanicinin kendi egzersiz kaydini siler
     with get_connection() as conn:
         conn.execute("DELETE FROM exercise_log WHERE id = ? AND user_id = ?", (log_id, user_id))
 
 
 def get_exercise_logs(user_id, days=None):
+    # egzersiz kayitlari, istenirse son X gunle sinirli
     query = "SELECT * FROM exercise_log WHERE user_id = ?"
     params = [user_id]
     if days is not None:
@@ -413,6 +442,7 @@ def get_exercise_logs(user_id, days=None):
 
 
 def get_today_calories_out(user_id):
+    # bugun yakilan toplam kalori
     with get_connection() as conn:
         row = conn.execute(
             """SELECT COALESCE(SUM(calories_burned), 0) AS total FROM exercise_log
@@ -423,6 +453,7 @@ def get_today_calories_out(user_id):
 
 
 def get_daily_summary(user_id, days=7):
+    # son X gunun gunluk alinan/yakilan kalori dokumu
     with get_connection() as conn:
         today = datetime.now().date()
         dates = [(today - timedelta(days=i)).isoformat() for i in range(days - 1, -1, -1)]
@@ -456,79 +487,57 @@ def get_daily_summary(user_id, days=7):
         ]
 
 
-def get_totals(user_id, days=None):
-    where_date = ""
-    params = [user_id]
-    if days is not None:
-        where_date = " AND logged_at >= datetime('now', ?, 'localtime')"
-        params_food = params + [f"-{days} days"]
-        params_ex = params + [f"-{days} days"]
-    else:
-        params_food = params
-        params_ex = params
-
+def _calorie_totals(date_filter, params):
+    # food_log ve exercise_log toplamlarini ayni tarih filtresiyle ceker
     with get_connection() as conn:
         cal_in = conn.execute(
-            f"SELECT COALESCE(SUM(calories), 0) AS t FROM food_log WHERE user_id = ?{where_date}",
-            params_food
+            f"SELECT COALESCE(SUM(calories), 0) AS t FROM food_log WHERE user_id = ?{date_filter}",
+            params
         ).fetchone()["t"]
         cal_out = conn.execute(
-            f"SELECT COALESCE(SUM(calories_burned), 0) AS t FROM exercise_log WHERE user_id = ?{where_date}",
-            params_ex
+            f"SELECT COALESCE(SUM(calories_burned), 0) AS t FROM exercise_log WHERE user_id = ?{date_filter}",
+            params
         ).fetchone()["t"]
-        return {"cal_in": int(cal_in), "cal_out": int(cal_out), "net": int(cal_in) - int(cal_out)}
+    return {"cal_in": int(cal_in), "cal_out": int(cal_out), "net": int(cal_in) - int(cal_out)}
+
+
+def get_totals(user_id, days=None):
+    # alinan/yakilan/net kalori toplami (gun sayisina gore)
+    if days is None:
+        return _calorie_totals("", [user_id])
+    return _calorie_totals(
+        " AND logged_at >= datetime('now', ?, 'localtime')",
+        [user_id, f"-{days} days"],
+    )
 
 
 def get_totals_today(user_id):
-    with get_connection() as conn:
-        cal_in = conn.execute(
-            """SELECT COALESCE(SUM(calories), 0) AS t FROM food_log
-               WHERE user_id = ? AND date(logged_at, 'localtime') = date('now', 'localtime')""",
-            (user_id,)
-        ).fetchone()["t"]
-        cal_out = conn.execute(
-            """SELECT COALESCE(SUM(calories_burned), 0) AS t FROM exercise_log
-               WHERE user_id = ? AND date(logged_at, 'localtime') = date('now', 'localtime')""",
-            (user_id,)
-        ).fetchone()["t"]
-        return {"cal_in": int(cal_in), "cal_out": int(cal_out), "net": int(cal_in) - int(cal_out)}
+    # bugunun kalori toplamlari
+    return _calorie_totals(
+        " AND date(logged_at, 'localtime') = date('now', 'localtime')",
+        [user_id],
+    )
 
 
 def get_totals_last_24h(user_id):
-    with get_connection() as conn:
-        cal_in = conn.execute(
-            """SELECT COALESCE(SUM(calories), 0) AS t FROM food_log
-               WHERE user_id = ? AND logged_at >= datetime('now', '-24 hours')""",
-            (user_id,)
-        ).fetchone()["t"]
-        cal_out = conn.execute(
-            """SELECT COALESCE(SUM(calories_burned), 0) AS t FROM exercise_log
-               WHERE user_id = ? AND logged_at >= datetime('now', '-24 hours')""",
-            (user_id,)
-        ).fetchone()["t"]
-        return {"cal_in": int(cal_in), "cal_out": int(cal_out), "net": int(cal_in) - int(cal_out)}
+    # son 24 saatin kalori toplamlari
+    return _calorie_totals(
+        " AND logged_at >= datetime('now', '-24 hours')",
+        [user_id],
+    )
 
 
 def get_totals_range(user_id, start_date, end_date):
-    s = str(start_date)[:10]
-    e = str(end_date)[:10]
-    with get_connection() as conn:
-        cal_in = conn.execute(
-            """SELECT COALESCE(SUM(calories), 0) AS t FROM food_log
-               WHERE user_id = ?
-                 AND date(logged_at, 'localtime') BETWEEN ? AND ?""",
-            (user_id, s, e)
-        ).fetchone()["t"]
-        cal_out = conn.execute(
-            """SELECT COALESCE(SUM(calories_burned), 0) AS t FROM exercise_log
-               WHERE user_id = ?
-                 AND date(logged_at, 'localtime') BETWEEN ? AND ?""",
-            (user_id, s, e)
-        ).fetchone()["t"]
-        return {"cal_in": int(cal_in), "cal_out": int(cal_out), "net": int(cal_in) - int(cal_out)}
+    # iki tarih arasinin kalori toplamlari
+    s, e = str(start_date)[:10], str(end_date)[:10]
+    return _calorie_totals(
+        " AND date(logged_at, 'localtime') BETWEEN ? AND ?",
+        [user_id, s, e],
+    )
 
 
 def get_daily_summary_range(user_id, start_date, end_date):
+    # iki tarih arasinin gunluk kalori dokumu
     s = str(start_date)[:10]
     e = str(end_date)[:10]
     start = datetime.fromisoformat(s).date()
@@ -572,6 +581,7 @@ def get_daily_summary_range(user_id, start_date, end_date):
 
 
 def get_hourly_summary_today(user_id):
+    # bugunun saat saat kalori dokumu (00-23)
     with get_connection() as conn:
         food_rows = conn.execute(
             """SELECT CAST(strftime('%H', logged_at, 'localtime') AS INTEGER) AS h,
@@ -605,6 +615,7 @@ def get_hourly_summary_today(user_id):
 
 
 def get_hourly_summary_last_24h(user_id):
+    # son 24 saati kayan pencere olarak saat saat dokuyoruz (dun 15:00 -> bugun 15:00 gibi)
     with get_connection() as conn:
         food_rows = conn.execute(
             """SELECT strftime('%Y-%m-%d %H', logged_at, 'localtime') AS hr,

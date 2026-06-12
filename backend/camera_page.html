@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Yemek Tara — CENG FITNESS</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body {
+    background: #0B1014; color: #E6EDF3;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+    padding: 16px; padding-bottom: 40px;
+  }
+  h1 { font-size: 18px; font-weight: 600; margin-bottom: 14px; color: #5EEAD4; }
+  .frame {
+    position: relative; width: 100%; max-width: 380px; aspect-ratio: 1;
+    background: #1E262F; border-radius: 20px; border: 2px solid #0F766E;
+    overflow: hidden; margin-bottom: 14px;
+  }
+  video, img.preview {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+  }
+  video { background: #000; }
+  img.preview { display: none; }
+  canvas { display: none; }
+  .placeholder {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px; color: #5A6A7A;
+    padding: 20px; text-align: center;
+  }
+  .placeholder svg { width: 64px; height: 64px; }
+  .placeholder.hidden { display: none; }
+  button {
+    background: #14B8A6; color: white; border: none; border-radius: 14px;
+    padding: 14px 22px; font-size: 14px; font-weight: 600; cursor: pointer;
+    font-family: inherit; min-height: 48px;
+  }
+  button.secondary { background: #2A3540; }
+  button.danger { background: #EF4444; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-row {
+    display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;
+    width: 100%; max-width: 380px;
+  }
+  .btn-row button { flex: 1; min-width: 130px; }
+  .info { font-size: 13px; color: #8B98A5; text-align: center; margin: 8px 0 14px; padding: 0 8px; }
+  .info.error { color: #EF4444; }
+  .result-card {
+    background: #151B22; border: 1px solid #2A3540; border-radius: 16px;
+    padding: 18px; margin-top: 14px; width: 100%; max-width: 380px;
+  }
+  .result-head {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    gap: 12px; margin-bottom: 12px;
+  }
+  .food-name { font-size: 19px; font-weight: 700; }
+  .confidence { font-size: 11px; color: #5A6A7A; margin-top: 3px; }
+  .cal-badge {
+    background: rgba(20, 184, 166, 0.13); padding: 10px 14px;
+    border-radius: 12px; text-align: center; min-width: 76px;
+  }
+  .cal-num { font-size: 22px; font-weight: 700; color: #5EEAD4; }
+  .cal-label { font-size: 10px; color: #5A6A7A; }
+  .macros { display: flex; gap: 8px; margin-bottom: 10px; }
+  .macro {
+    flex: 1; padding: 10px 6px; border-radius: 10px; text-align: center;
+    background: #1E262F;
+  }
+  .macro-label { font-size: 10px; color: #8B98A5; }
+  .macro-val { font-size: 13px; font-weight: 600; margin-top: 2px; }
+  .advice {
+    background: rgba(59, 130, 246, 0.07); padding: 12px;
+    border-radius: 10px; font-size: 12px; color: #8B98A5;
+    font-style: italic; margin-bottom: 12px; line-height: 1.4;
+  }
+  .loading {
+    position: absolute; inset: 0; background: rgba(0,0,0,0.72);
+    display: none; flex-direction: column; align-items: center;
+    justify-content: center; gap: 12px; color: white; font-weight: 600;
+  }
+  .loading.show { display: flex; }
+  .spinner {
+    width: 38px; height: 38px;
+    border: 3px solid rgba(94, 234, 212, 0.25);
+    border-top-color: #5EEAD4; border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .hidden { display: none !important; }
+  .success-box { text-align: center; padding: 8px; }
+  .success-box .emoji { font-size: 44px; margin-bottom: 8px; }
+  .success-box .title { font-weight: 600; margin-bottom: 6px; }
+  .success-box .sub { color: #8B98A5; font-size: 13px; margin-bottom: 16px; }
+</style>
+</head>
+<body>
+  <h1>Yemek Tara</h1>
+
+  <div class="frame">
+    <div class="placeholder" id="placeholder">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7zm0-9c3.04 0 5.5 2.46 5.5 5.5S15.04 17.5 12 17.5 6.5 15.04 6.5 12 8.96 6.5 12 6.5zm-3-4l-1.83 2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6.5c0-1.1-.9-2-2-2h-3.17L15 2.5H9z"/></svg>
+      <div>Kamerayı başlatmak için aşağıdaki butona bas</div>
+    </div>
+    <video id="video" autoplay playsinline muted></video>
+    <img class="preview" id="preview" />
+    <canvas id="canvas"></canvas>
+    <div class="loading" id="loading">
+      <div class="spinner"></div>
+      <div id="loadingText">Yapay zeka analiz ediyor...</div>
+    </div>
+  </div>
+
+  <div class="info" id="info">Aşağıdan kamerayı başlat, yemeği çerçeveye al ve fotoğraf çek.</div>
+
+  <input type="file" accept="image/*" id="fileInput" style="display:none" onchange="handleFile(event)">
+
+  <div class="btn-row" id="btnRow">
+    <button id="startBtn" onclick="startCamera()">Kamerayı Aç</button>
+    <button id="galleryBtn" class="secondary hidden" onclick="document.getElementById('fileInput').click()">Galeriden Seç</button>
+    <button id="captureBtn" class="hidden" onclick="captureAndAnalyze()">Fotoğraf Çek</button>
+    <button id="switchBtn" class="secondary hidden" onclick="switchCamera()">Çevir</button>
+    <button id="retryBtn" class="secondary hidden" onclick="reset()">Tekrar Dene</button>
+  </div>
+
+  <div id="result"></div>
+
+<script>
+const USER_ID = "__USER_ID__";
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const preview = document.getElementById('preview');
+const placeholder = document.getElementById('placeholder');
+const loading = document.getElementById('loading');
+const loadingText = document.getElementById('loadingText');
+const info = document.getElementById('info');
+const startBtn = document.getElementById('startBtn');
+const galleryBtn = document.getElementById('galleryBtn');
+const captureBtn = document.getElementById('captureBtn');
+const switchBtn = document.getElementById('switchBtn');
+const retryBtn = document.getElementById('retryBtn');
+const result = document.getElementById('result');
+
+let stream = null;
+let facingMode = 'environment';
+let lastResult = null;
+
+const IS_ANDROID = /android/i.test(navigator.userAgent);
+if (IS_ANDROID) galleryBtn.classList.remove('hidden');
+
+function setInfo(msg, isError) {
+  info.textContent = msg;
+  info.className = 'info' + (isError ? ' error' : '');
+}
+
+async function startCamera() {
+  try {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    const constraints = {
+      video: {
+        facingMode: { ideal: facingMode },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+      audio: false,
+    };
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = stream;
+    placeholder.classList.add('hidden');
+    startBtn.classList.add('hidden');
+    galleryBtn.classList.add('hidden');
+    retryBtn.classList.add('hidden');
+    captureBtn.classList.remove('hidden');
+    switchBtn.classList.remove('hidden');
+    video.style.display = 'block';
+    preview.style.display = 'none';
+    setInfo('Yemeği çerçeveye al ve "Fotoğraf Çek"e bas.');
+  } catch (err) {
+    let msg = err.message || String(err);
+    if (err.name === 'NotAllowedError') msg = 'Kamera izni reddedildi. Tarayıcı ayarlarından izin ver.';
+    else if (err.name === 'NotFoundError') msg = 'Bu cihazda kamera bulunamadı.';
+    else if (err.name === 'NotReadableError') msg = 'Kamera başka bir uygulama tarafından kullanılıyor.';
+    setInfo('Kamera açılamadı: ' + msg, true);
+    startBtn.classList.remove('hidden');
+    if (IS_ANDROID) galleryBtn.classList.remove('hidden');
+    captureBtn.classList.add('hidden');
+    switchBtn.classList.add('hidden');
+  }
+}
+
+async function switchCamera() {
+  facingMode = (facingMode === 'environment') ? 'user' : 'environment';
+  await startCamera();
+}
+
+async function analyzeBase64(b64) {
+  placeholder.classList.add('hidden');
+  preview.src = b64;
+  preview.style.display = 'block';
+  video.style.display = 'none';
+
+  startBtn.classList.add('hidden');
+  galleryBtn.classList.add('hidden');
+  captureBtn.classList.add('hidden');
+  switchBtn.classList.add('hidden');
+  loading.classList.add('show');
+  loadingText.textContent = 'Yapay zeka analiz ediyor...';
+  setInfo('Analiz ediliyor, birkaç saniye sürebilir...');
+
+  try {
+    const resp = await fetch('/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: b64 }),
+    });
+    const data = await resp.json();
+    loading.classList.remove('show');
+    if (data.status === 'ok') {
+      lastResult = data;
+      renderResult(data);
+    } else {
+      setInfo('Hata: ' + (data.message || 'Bilinmeyen'), true);
+      retryBtn.classList.remove('hidden');
+    }
+  } catch (err) {
+    loading.classList.remove('show');
+    setInfo('Bağlantı hatası: ' + err.message, true);
+    retryBtn.classList.remove('hidden');
+  }
+}
+
+async function captureAndAnalyze() {
+  if (!stream) return;
+  const w = video.videoWidth || 640;
+  const h = video.videoHeight || 480;
+  canvas.width = w;
+  canvas.height = h;
+  canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+  const b64 = canvas.toDataURL('image/jpeg', 0.88);
+
+  stream.getTracks().forEach(t => t.stop());
+  stream = null;
+  video.srcObject = null;
+  await analyzeBase64(b64);
+}
+
+function handleFile(e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; video.srcObject = null; }
+  const reader = new FileReader();
+  reader.onload = () => analyzeBase64(reader.result);
+  reader.onerror = () => setInfo('Dosya okunamadı.', true);
+  reader.readAsDataURL(file);
+  e.target.value = '';
+}
+
+function renderResult(d) {
+  const m = d.macros || {};
+  result.innerHTML = `
+    <div class="result-card">
+      <div class="result-head">
+        <div>
+          <div class="food-name">${escapeHtml(d.food_name)}</div>
+          <div class="confidence">Güven: %${d.confidence}</div>
+        </div>
+        <div class="cal-badge">
+          <div class="cal-num">${escapeHtml(String(d.calories))}</div>
+          <div class="cal-label">kcal</div>
+        </div>
+      </div>
+      <div class="macros">
+        <div class="macro" style="color:#F87171"><div class="macro-label">Protein</div><div class="macro-val">${escapeHtml(m.protein || '?')}</div></div>
+        <div class="macro" style="color:#FBBF24"><div class="macro-label">Karb</div><div class="macro-val">${escapeHtml(m.karb || '?')}</div></div>
+        <div class="macro" style="color:#A78BFA"><div class="macro-label">Yağ</div><div class="macro-val">${escapeHtml(m.yag || '?')}</div></div>
+      </div>
+      <div class="advice">${escapeHtml(d.advice || '')}</div>
+      <div class="btn-row">
+        <button class="secondary" onclick="reset()">İptal</button>
+        <button onclick="saveLog()">Günlüğe Ekle</button>
+      </div>
+    </div>
+  `;
+  setInfo('Sonuç hazır. Günlüğüne kaydetmek için "Günlüğe Ekle"ye bas.');
+}
+
+async function saveLog() {
+  if (!lastResult) return;
+  if (!USER_ID) { setInfo('Kullanıcı kimliği bulunamadı, ana sayfaya dönüp tekrar dene.', true); return; }
+  try {
+    const resp = await fetch('/save-food-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: USER_ID,
+        food_name: lastResult.food_name,
+        calories: lastResult.calories,
+        protein: (lastResult.macros || {}).protein,
+        karb: (lastResult.macros || {}).karb,
+        yag: (lastResult.macros || {}).yag,
+      }),
+    });
+    const data = await resp.json();
+    if (data.status === 'ok') {
+      result.innerHTML = `
+        <div class="result-card">
+          <div class="success-box">
+            <div class="emoji">✅</div>
+            <div class="title">Günlüğüne eklendi!</div>
+            <div class="sub">${escapeHtml(lastResult.food_name)} • ${escapeHtml(String(lastResult.calories))} kcal</div>
+            <div class="btn-row">
+              <button class="secondary" onclick="window.close()">Pencereyi Kapat</button>
+              <button onclick="reset()">Yeni Tarama</button>
+            </div>
+          </div>
+        </div>
+      `;
+      setInfo('Kayıt başarılı.');
+    } else {
+      setInfo('Kayıt hatası: ' + (data.message || ''), true);
+    }
+  } catch (err) {
+    setInfo('Kayıt hatası: ' + err.message, true);
+  }
+}
+
+function reset() {
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  video.srcObject = null;
+  video.style.display = 'block';
+  preview.style.display = 'none';
+  preview.src = '';
+  result.innerHTML = '';
+  loading.classList.remove('show');
+  placeholder.classList.remove('hidden');
+  startBtn.classList.remove('hidden');
+  if (IS_ANDROID) galleryBtn.classList.remove('hidden');
+  captureBtn.classList.add('hidden');
+  switchBtn.classList.add('hidden');
+  retryBtn.classList.add('hidden');
+  lastResult = null;
+  setInfo('Aşağıdan kamerayı başlat, yemeği çerçeveye al ve fotoğraf çek.');
+}
+
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+}
+</script>
+</body>
+</html>

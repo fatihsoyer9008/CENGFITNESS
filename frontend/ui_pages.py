@@ -6,10 +6,8 @@ from datetime import datetime, timedelta
 import flet as ft
 import requests
 
-import database
-import auth
-import exercises_data
-import foods_data
+from backend import auth, database
+from data import exercises_data, foods_data
 
 
 PRIMARY        = "#14B8A6"
@@ -37,6 +35,7 @@ FAT_COLOR     = "#A78BFA"
 
 
 def card(content, padding=20, width=None, **kwargs):
+    # icerigi koyu renkli, yuvarlak koseli karta sarar
     return ft.Container(
         content=content,
         bgcolor=SURFACE_DARK,
@@ -49,6 +48,7 @@ def card(content, padding=20, width=None, **kwargs):
 
 
 def primary_button(text, on_click, icon=None, width=None, expand=False):
+    # dolgulu turkuaz ana buton
     return ft.FilledButton(
         text=text, icon=icon, on_click=on_click, width=width, expand=expand,
         style=ft.ButtonStyle(
@@ -61,6 +61,7 @@ def primary_button(text, on_click, icon=None, width=None, expand=False):
 
 
 def outlined_button(text, on_click, icon=None, width=None):
+    # cerceveli ikincil buton
     return ft.OutlinedButton(
         text=text, icon=icon, on_click=on_click, width=width,
         style=ft.ButtonStyle(
@@ -75,6 +76,7 @@ def outlined_button(text, on_click, icon=None, width=None):
 
 def text_field(label, password=False, value="", width=None, on_change=None,
                prefix_icon=None, hint=None, keyboard_type=None):
+    # ortak stilli metin girisi
     return ft.TextField(
         label=label, password=password, can_reveal_password=password,
         value=value, width=width, on_change=on_change,
@@ -89,7 +91,21 @@ def text_field(label, password=False, value="", width=None, on_change=None,
     )
 
 
+def dropdown(label, options, value=None, width=None, on_change=None, padding=16):
+    # koyu temaya uygun ortak dropdown, her sayfada ayni stili tekrarlamamak icin
+    return ft.Dropdown(
+        label=label, value=value, width=width, on_change=on_change,
+        options=[ft.dropdown.Option(o) for o in options],
+        border_color=BORDER_DARK, focused_border_color=PRIMARY,
+        bgcolor=SURFACE_DARK_2, border_radius=12,
+        content_padding=ft.padding.all(padding),
+        label_style=ft.TextStyle(color=TEXT_SECONDARY),
+        text_style=ft.TextStyle(color=TEXT_PRIMARY),
+    )
+
+
 def show_snack(page, message, color=PRIMARY):
+    # ekranin altinda kisa bildirim gosterir
     page.snack_bar = ft.SnackBar(
         content=ft.Text(message, color="white", weight="bold"),
         bgcolor=color,
@@ -114,6 +130,7 @@ def refresh_view(page, route=None):
 
 
 def stat_card(icon, label, value, unit, color):
+    # ana sayfadaki ikonlu ozet karti
     return ft.Container(
         content=ft.Column([
             ft.Row([
@@ -140,6 +157,7 @@ def stat_card(icon, label, value, unit, color):
 
 
 def macro_chip(label, value, color):
+    # protein/karb/yag degerini renkli rozet olarak gosterir
     return ft.Container(
         content=ft.Column([
             ft.Text(label, size=11, color=color, weight="w500"),
@@ -150,6 +168,67 @@ def macro_chip(label, value, color):
         border_radius=10,
         expand=True,
     )
+
+
+def period_button(label, active, on_click):
+    # istatistik sayfalarindaki donem secici butonlar (aktif olan dolgulu)
+    return ft.FilledButton(
+        label, on_click=on_click,
+        style=ft.ButtonStyle(
+            bgcolor=PRIMARY if active else SURFACE_DARK_2,
+            color="white" if active else TEXT_SECONDARY,
+            shape=ft.RoundedRectangleBorder(radius=10),
+            padding=ft.padding.symmetric(horizontal=18, vertical=14),
+            text_style=ft.TextStyle(weight="bold", size=13),
+        ),
+    )
+
+
+def date_field(label, value, on_click):
+    # tiklanabilir tarih kutusu, takvim acar
+    return ft.Container(
+        content=ft.Row([
+            ft.Icon(ft.Icons.CALENDAR_TODAY, color=PRIMARY_LIGHT, size=18),
+            ft.Column([
+                ft.Text(label, size=10, color=TEXT_MUTED),
+                ft.Text(value, size=13, weight="bold", color=TEXT_PRIMARY),
+            ], spacing=0),
+        ], spacing=10),
+        padding=ft.padding.symmetric(horizontal=14, vertical=10),
+        bgcolor=SURFACE_DARK_2,
+        border=ft.border.all(1, BORDER_DARK),
+        border_radius=10,
+        on_click=on_click,
+        ink=True,
+    )
+
+
+def date_picker_opener(page, session_key, period_key, period_value, route):
+    # tarih secilince session'a yazip sayfayi yeniler
+    def on_change(e):
+        if e.control.value:
+            page.session.set(session_key, e.control.value.date().isoformat())
+            page.session.set(period_key, period_value)
+            refresh_view(page, route)
+
+    picker = ft.DatePicker(
+        first_date=datetime(2024, 1, 1),
+        last_date=datetime.now(),
+        on_change=on_change,
+    )
+
+    def opener(e):
+        # picker'ı view inşası sırasında overlay'a eklemiyoruz; aksi halde
+        # eski view'ın mount durumuyla çakışıp Flet stale ID hatası atıyor
+        if picker not in page.overlay:
+            page.overlay.append(picker)
+        try:
+            page.open(picker)
+        except Exception:
+            picker.open = True
+            page.update()
+
+    return opener
 
 
 NAV_ITEMS = [
@@ -166,21 +245,26 @@ MOBILE_BREAKPOINT = 760
 
 
 def is_mobile(page):
+    # dar ekran tespiti; mobilde sidebar yerine drawer kullaniyoruz
     w = getattr(page, "width", None) or 1200
     return w < MOBILE_BREAKPOINT
 
 
 def _nav_content(page, current_route, on_select=None):
+    # sidebar ve drawer ayni menu icerigini kullaniyor, tek yerden uretiyoruz
     user_name = page.session.get("user_name") or "Misafir"
 
     def go_to(route):
+        # menu ogesi icin tiklama handler'i uretir
         def handler(e):
+            # secilen rotaya gecis
             if on_select:
                 on_select()
             page.go(route)
         return handler
 
     def logout(e):
+        # oturumu kapatip giris ekranina doner
         if on_select:
             on_select()
         page.session.clear()
@@ -254,6 +338,7 @@ def _nav_content(page, current_route, on_select=None):
 
 
 def build_sidebar(page, current_route):
+    # genis ekranlardaki sabit sol menu
     return ft.Container(
         width=240,
         bgcolor=SURFACE_DARK,
@@ -266,9 +351,11 @@ def build_sidebar(page, current_route):
 
 
 def build_drawer(page, current_route):
+    # mobil icin acilir menu (hamburger)
     drawer = ft.NavigationDrawer(bgcolor=SURFACE_DARK)
 
     def close_drawer():
+        # menuyu kapatir
         try:
             page.close(drawer)
         except Exception:
@@ -280,6 +367,7 @@ def build_drawer(page, current_route):
 
 
 def shell(page, route, title, subtitle, body_controls, fab=None, header_actions=None):
+    # tum sayfalarin ortak iskeleti: solda menu (mobilde drawer), ustte baslik, altta icerik
     mobile = is_mobile(page)
     extras = list(header_actions) if header_actions else []
 
@@ -292,6 +380,7 @@ def shell(page, route, title, subtitle, body_controls, fab=None, header_actions=
         drawer = build_drawer(page, route)
 
         def open_drawer(e):
+            # hamburger butonuyla menuyu acar
             try:
                 page.open(drawer)
             except Exception:
@@ -374,6 +463,7 @@ def shell(page, route, title, subtitle, body_controls, fab=None, header_actions=
 
 
 def build_login_view(page):
+    # giris ekrani
     mobile = is_mobile(page)
     page_w = getattr(page, "width", None) or 1200
     card_w = min(400, page_w - 24) if mobile else 400
@@ -385,6 +475,7 @@ def build_login_view(page):
     error_text = ft.Text("", color=DANGER, size=13, visible=False)
 
     def do_login(e):
+        # bilgileri dogrulayip oturumu acar
         ok, msg, user = auth.login(email.value or "", password.value or "")
         if not ok:
             error_text.value = msg
@@ -447,6 +538,7 @@ def build_login_view(page):
 
 
 def build_register_view(page):
+    # kayit ekrani
     mobile = is_mobile(page)
     page_w = getattr(page, "width", None) or 1200
     card_w = min(420, page_w - 24) if mobile else 420
@@ -465,23 +557,12 @@ def build_register_view(page):
     age = text_field("Yaş", prefix_icon=ft.Icons.CAKE, width=half_w,
                      keyboard_type=ft.KeyboardType.NUMBER)
 
-    gender = ft.Dropdown(
-        label="Cinsiyet", width=half_w,
-        border_color=BORDER_DARK, focused_border_color=PRIMARY,
-        bgcolor=SURFACE_DARK_2, border_radius=12,
-        content_padding=ft.padding.all(16),
-        label_style=ft.TextStyle(color=TEXT_SECONDARY),
-        text_style=ft.TextStyle(color=TEXT_PRIMARY),
-        options=[
-            ft.dropdown.Option("Erkek"),
-            ft.dropdown.Option("Kadın"),
-            ft.dropdown.Option("Diğer"),
-        ],
-    )
+    gender = dropdown("Cinsiyet", ("Erkek", "Kadın", "Diğer"), width=half_w)
 
     error_text = ft.Text("", color=DANGER, size=13, visible=False)
 
     def do_register(e):
+        # formu dogrulayip yeni hesap olusturur
         ok, msg, uid = auth.register(
             email=email.value or "",
             password=password.value or "",
@@ -553,6 +634,7 @@ def build_register_view(page):
 
 
 def quick_action(icon, label, route, page, color=PRIMARY, col=None):
+    # ana sayfadaki hizli erisim kutusu
     return ft.Container(
         content=ft.Column([
             ft.Container(
@@ -573,6 +655,7 @@ def quick_action(icon, label, route, page, color=PRIMARY, col=None):
 
 
 def build_dashboard_view(page):
+    # ana sayfa: gunun ozeti, haftalik kas ozeti, hizli erisim
     user_id = page.session.get("user_id")
     user = database.get_user_by_id(user_id)
 
@@ -726,6 +809,7 @@ def build_dashboard_view(page):
 
 
 def build_scan_view(page, server_url, upload_dir):
+    # yemek tarama sayfasi: kamera sayfasina yonlendirme + dosya yukleme
     user_id = page.session.get("user_id")
     is_phone = is_mobile(page)
     is_android = "android" in (page.client_user_agent or "").lower()
@@ -764,17 +848,21 @@ def build_scan_view(page, server_url, upload_dir):
     result_card_container = ft.Container(visible=False)
 
     def set_info(msg, color=TEXT_SECONDARY):
+        # alt bilgi satirini gunceller
         info_text.value = msg
         info_text.color = color
 
     def show_busy(label):
+        # onizleme ustune 'yukleniyor' katmani basar
         overlay_label.value = label
         busy_overlay.visible = True
 
     def hide_busy():
+        # yukleniyor katmanini gizler
         busy_overlay.visible = False
 
     def reset_to_idle(msg=None):
+        # sayfayi ilk haline dondurur
         state["image_b64"] = None
         state["pending_file"] = None
         placeholder.visible = True
@@ -791,6 +879,7 @@ def build_scan_view(page, server_url, upload_dir):
         page.update()
 
     def show_error(msg):
+        # hata mesaji gosterip butonlari tekrar acar
         hide_busy()
         pick_btn.disabled = False
         analyze_btn.disabled = False
@@ -798,12 +887,14 @@ def build_scan_view(page, server_url, upload_dir):
         page.update()
 
     def render_result_card(resp):
+        # analiz sonucunu kart olarak cizer
         food_name = resp.get("food_name", "BİLİNMİYOR")
         cal = resp.get("calories", 0)
         macros = resp.get("macros", {})
         advice = resp.get("advice", "")
 
         def save(e):
+            # sonucu yemek gunlugune kaydeder
             try:
                 database.add_food_log(
                     user_id=user_id, food_name=food_name, calories=cal,
@@ -857,6 +948,7 @@ def build_scan_view(page, server_url, upload_dir):
         result_card_container.visible = True
 
     def display_result(resp):
+        # sonuc kartini gosterip butonlari gunceller
         hide_busy()
         render_result_card(resp)
         pick_btn.disabled = False
@@ -867,6 +959,7 @@ def build_scan_view(page, server_url, upload_dir):
         page.update()
 
     def send_for_analysis():
+        # secilen fotografi /analyze'a gonderir
         if not state["image_b64"]:
             show_error("Önce bir fotoğraf seç.")
             return
@@ -878,6 +971,7 @@ def build_scan_view(page, server_url, upload_dir):
         page.update()
 
         def worker():
+            # istegi arka planda atar, arayuz donmasin diye
             try:
                 resp = requests.post(
                     f"{server_url}/analyze",
@@ -898,6 +992,7 @@ def build_scan_view(page, server_url, upload_dir):
         threading.Thread(target=worker, daemon=True).start()
 
     def load_file_bytes(path):
+        # yuklenen dosyayi okuyup base64 onizlemeye ceviriyoruz, diskte tutmaya gerek yok
         try:
             with open(path, "rb") as fh:
                 raw = fh.read()
@@ -924,14 +1019,17 @@ def build_scan_view(page, server_url, upload_dir):
         page.update()
 
     def on_file_picked(e: ft.FilePickerResultEvent):
+        # dosya secilince calisir
         if not e.files:
             return
         f = e.files[0]
 
+        # masaustu uygulamasinda dosya yolu direkt gelir, web'de gelmez
         if f.path and os.path.exists(f.path):
             load_file_bytes(f.path)
             return
 
+        # web'de dosya once sunucuya upload edilir, sonra oradan okunur
         safe_name = f.name.replace("\\", "_").replace("/", "_")
         state["pending_file"] = safe_name
         try:
@@ -949,6 +1047,7 @@ def build_scan_view(page, server_url, upload_dir):
         file_picker.upload([ft.FilePickerUploadFile(name=f.name, upload_url=upload_url)])
 
     def on_upload(e: ft.FilePickerUploadEvent):
+        # web yuklemesi bitince dosyayi okur
         if e.error:
             show_error(f"Yükleme hatası: {e.error}")
             state["pending_file"] = None
@@ -970,6 +1069,7 @@ def build_scan_view(page, server_url, upload_dir):
     page.overlay.append(file_picker)
 
     def open_picker(e):
+        # dosya secme penceresini acar
         if result_card_container.visible:
             reset_to_idle()
         file_picker.pick_files(
@@ -978,6 +1078,7 @@ def build_scan_view(page, server_url, upload_dir):
         )
 
     def open_camera_popup(e):
+        # masaustunde kamera sayfasi kucuk bir popup pencerede acilir
         if not user_id:
             show_snack(page, "Önce giriş yap", DANGER)
             return
@@ -989,12 +1090,15 @@ def build_scan_view(page, server_url, upload_dir):
         )
 
     def open_camera_tab(e):
+        # android'de flet'in dosya secicisi calismadigi icin kamera sayfasini
+        # yeni sekmede aciyoruz, kamera ve galeri secimi orada yapiliyor
         if not user_id:
             show_snack(page, "Önce giriş yap", DANGER)
             return
         page.launch_url(f"/camera-page?user_id={user_id}", web_window_name="_blank")
 
     def scan_btn(text, icon, on_click, bg, visible=True):
+        # tarama sayfasindaki ortak buton kalibi
         return ft.FilledButton(
             text=text, icon=icon, on_click=on_click, visible=visible,
             style=ft.ButtonStyle(
@@ -1058,6 +1162,7 @@ def build_scan_view(page, server_url, upload_dir):
 
 
 def build_food_log_view(page):
+    # yemek gunlugu sayfasi
     user_id = page.session.get("user_id")
 
     selected = {"food": None}
@@ -1079,6 +1184,7 @@ def build_food_log_view(page):
     portion_label = ft.Text("", size=11, color=TEXT_MUTED, italic=True)
 
     def apply_portion():
+        # secilen yemegin degerlerini porsiyon adediyle carpar
         food = selected["food"]
         if not food:
             return
@@ -1099,6 +1205,7 @@ def build_food_log_view(page):
         page.update()
 
     def clear_selection():
+        # formu ve hazir liste secimini temizler
         selected["food"] = None
         portion_label.value = ""
         portion_input.value = "1"
@@ -1109,6 +1216,7 @@ def build_food_log_view(page):
         fat_input.value = ""
 
     def on_category_change(e):
+        # kategori degisince yemek listesini doldurur
         cat = e.control.value
         if not cat:
             return
@@ -1121,6 +1229,7 @@ def build_food_log_view(page):
         page.update()
 
     def on_food_pick(e):
+        # yemek secilince formu otomatik doldurur
         name = e.control.value
         if not name:
             return
@@ -1132,40 +1241,24 @@ def build_food_log_view(page):
         apply_portion()
 
     def on_portion_change(e):
+        # adet degisince degerleri yeniden hesaplar
         if selected["food"]:
             apply_portion()
 
     portion_input.on_change = on_portion_change
 
-    category_picker = ft.Dropdown(
-        label="Kategori",
-        on_change=on_category_change,
-        border_color=BORDER_DARK, focused_border_color=PRIMARY,
-        bgcolor=SURFACE_DARK_2, border_radius=12,
-        content_padding=ft.padding.all(14),
-        label_style=ft.TextStyle(color=TEXT_SECONDARY),
-        text_style=ft.TextStyle(color=TEXT_PRIMARY),
-        width=320,
-        options=[ft.dropdown.Option(c) for c in foods_data.get_categories()],
-    )
-
-    food_picker = ft.Dropdown(
-        label="Yemek seç",
-        on_change=on_food_pick,
-        border_color=BORDER_DARK, focused_border_color=PRIMARY,
-        bgcolor=SURFACE_DARK_2, border_radius=12,
-        content_padding=ft.padding.all(14),
-        label_style=ft.TextStyle(color=TEXT_SECONDARY),
-        text_style=ft.TextStyle(color=TEXT_PRIMARY),
-        width=320,
-        options=[],
-    )
+    category_picker = dropdown("Kategori", foods_data.get_categories(),
+                               width=320, on_change=on_category_change, padding=14)
+    food_picker = dropdown("Yemek seç", [], width=320,
+                           on_change=on_food_pick, padding=14)
 
     def close_dialog(e=None):
+        # dialogu kapatir
         dialog.open = False
         page.update()
 
     def save_manual(e):
+        # formdaki yemegi gunluge kaydeder
         if not food_name.value or not calories_input.value:
             show_snack(page, "Yemek adı ve kalori zorunlu", DANGER)
             return
@@ -1215,6 +1308,7 @@ def build_food_log_view(page):
     )
 
     def open_add_dialog(e):
+        # yemek ekleme dialogunu acar
         clear_selection()
         category_picker.value = None
         food_picker.value = None
@@ -1224,7 +1318,9 @@ def build_food_log_view(page):
         page.update()
 
     def delete_entry(log_id):
+        # satirdaki sil butonu icin handler uretir
         def handler(e):
+            # kaydi silip listeyi yeniler
             database.delete_food_log(log_id, user_id)
             show_snack(page, "Silindi", WARNING)
             refresh_view(page, "/food")
@@ -1235,6 +1331,7 @@ def build_food_log_view(page):
     today_total = sum(l["calories"] for l in logs_today)
 
     def render_log_row(log):
+        # tek yemek kaydini liste satiri olarak cizer
         src = log.get("source") or "manual"
         if src == "camera":
             icon, icon_color = ft.Icons.CAMERA_ALT, PRIMARY_LIGHT
@@ -1335,6 +1432,7 @@ SECONDS_PER_SET = 90
 
 
 def build_exercise_view(page):
+    # egzersiz sayfasi
     user_id = page.session.get("user_id")
     user = database.get_user_by_id(user_id)
     user_weight = user.get("weight_kg") or 70.0
@@ -1361,6 +1459,7 @@ def build_exercise_view(page):
     sets_reps_row = ft.Row([sets_field, reps_field], spacing=10, visible=False)
 
     def update_estimate(e=None):
+        # sure/kilo degisince tahmini kaloriyi gunceller
         ex = selected["exercise"]
         if not ex:
             estimate_text.value = ""
@@ -1405,10 +1504,12 @@ def build_exercise_view(page):
     weight_field.on_change = update_estimate
 
     def close_dialog(e=None):
+        # dialogu kapatir
         dialog.open = False
         page.update()
 
     def save_exercise(e):
+        # egzersizi dogrulayip gunluge kaydeder
         ex = selected["exercise"]
         if not ex:
             return
@@ -1483,7 +1584,9 @@ def build_exercise_view(page):
     )
 
     def open_exercise_dialog(ex):
+        # secilen hareket icin kayit dialogu acan handler uretir
         def handler(e):
+            # dialogu secilen hareketle hazirlayip acar
             selected["exercise"] = ex
             is_strength = ex["category"] in STRENGTH_CATEGORIES
             selected["mode"] = "sets" if is_strength else "duration"
@@ -1515,6 +1618,7 @@ def build_exercise_view(page):
         return handler
 
     def make_exercise_row(ex):
+        # listede secilebilir hareket satiri
         return ft.Container(
             content=ft.Row([
                 ft.Icon(
@@ -1580,6 +1684,7 @@ def build_exercise_view(page):
     recent = database.get_exercise_logs(user_id, days=1)
 
     def render_ex_row(log):
+        # gecmis egzersiz kaydini satir olarak cizer
         sets = log.get("sets") or 0
         reps = log.get("reps") or 0
         weight = log.get("weight_kg") or 0
@@ -1659,6 +1764,7 @@ def build_exercise_view(page):
 
 
 def build_stats_view(page):
+    # kalori takibi sayfasi
     user_id = page.session.get("user_id")
     period = page.session.get("stats_period") or "7g"
     today = datetime.now().date()
@@ -1692,52 +1798,11 @@ def build_stats_view(page):
         daily = database.get_daily_summary_range(user_id, custom_start, custom_end)
         period_label = f"{custom_start} → {custom_end}"
 
-    def on_start_change(e):
-        if e.control.value:
-            page.session.set("stats_custom_start", e.control.value.date().isoformat())
-            page.session.set("stats_period", "ozel")
-            refresh_view(page, "/stats")
-
-    def on_end_change(e):
-        if e.control.value:
-            page.session.set("stats_custom_end", e.control.value.date().isoformat())
-            page.session.set("stats_period", "ozel")
-            refresh_view(page, "/stats")
-
-    start_picker = ft.DatePicker(
-        first_date=datetime(2024, 1, 1),
-        last_date=datetime.now(),
-        on_change=on_start_change,
-    )
-    end_picker = ft.DatePicker(
-        first_date=datetime(2024, 1, 1),
-        last_date=datetime.now(),
-        on_change=on_end_change,
-    )
-
-    # Picker'ları view inşası sırasında overlay'a eklemiyoruz; aksi halde
-    # eski view'ın mount durumuyla çakışıp Flet stale ID hatası atıyor
-    def _ensure_in_overlay(ctrl):
-        if ctrl not in page.overlay:
-            page.overlay.append(ctrl)
-
-    def open_start(e):
-        _ensure_in_overlay(start_picker)
-        try:
-            page.open(start_picker)
-        except Exception:
-            start_picker.open = True
-            page.update()
-
-    def open_end(e):
-        _ensure_in_overlay(end_picker)
-        try:
-            page.open(end_picker)
-        except Exception:
-            end_picker.open = True
-            page.update()
+    open_start = date_picker_opener(page, "stats_custom_start", "stats_period", "ozel", "/stats")
+    open_end = date_picker_opener(page, "stats_custom_end", "stats_period", "ozel", "/stats")
 
     def build_bar_chart(daily):
+        # gunluk alinan/yakilan kalori cubuk grafigi
         max_val = max(
             [d["cal_in"] for d in daily] + [d["cal_out"] for d in daily] + [100]
         )
@@ -1784,6 +1849,7 @@ def build_stats_view(page):
         )
 
     def build_line_chart(daily):
+        # net kalori cizgi grafigi
         max_abs = max([abs(d["net"]) for d in daily] + [100])
         max_y = ((max_abs // 200) + 1) * 200
         points = [ft.LineChartDataPoint(x=i, y=d["net"]) for i, d in enumerate(daily)]
@@ -1817,6 +1883,7 @@ def build_stats_view(page):
         )
 
     def build_hourly_chart(hourly):
+        # saat saat dagilim grafigi
         max_val = max(
             [h["cal_in"] for h in hourly] + [h["cal_out"] for h in hourly] + [100]
         )
@@ -1862,23 +1929,16 @@ def build_stats_view(page):
         )
 
     def set_period(p):
+        # donem secimini kaydedip sayfayi yenileyen handler uretir
         def handler(e):
+            # donemi kaydet, sayfayi yenile
             page.session.set("stats_period", p)
             refresh_view(page, "/stats")
         return handler
 
     def period_btn(label, key):
-        is_active = period == key
-        return ft.FilledButton(
-            label, on_click=set_period(key),
-            style=ft.ButtonStyle(
-                bgcolor=PRIMARY if is_active else SURFACE_DARK_2,
-                color="white" if is_active else TEXT_SECONDARY,
-                shape=ft.RoundedRectangleBorder(radius=10),
-                padding=ft.padding.symmetric(horizontal=18, vertical=14),
-                text_style=ft.TextStyle(weight="bold", size=13),
-            ),
-        )
+        # donem secici buton
+        return period_button(label, period == key, set_period(key))
 
     period_buttons = ft.Row([
         period_btn("Bugün", "bugun"),
@@ -1887,23 +1947,6 @@ def build_stats_view(page):
         period_btn("30 Gün", "30g"),
         period_btn("Özel aralık", "ozel"),
     ], spacing=8, wrap=True)
-
-    def date_field(label, value, on_click):
-        return ft.Container(
-            content=ft.Row([
-                ft.Icon(ft.Icons.CALENDAR_TODAY, color=PRIMARY_LIGHT, size=18),
-                ft.Column([
-                    ft.Text(label, size=10, color=TEXT_MUTED),
-                    ft.Text(value, size=13, weight="bold", color=TEXT_PRIMARY),
-                ], spacing=0),
-            ], spacing=10),
-            padding=ft.padding.symmetric(horizontal=14, vertical=10),
-            bgcolor=SURFACE_DARK_2,
-            border=ft.border.all(1, BORDER_DARK),
-            border_radius=10,
-            on_click=on_click,
-            ink=True,
-        )
 
     custom_range_row = ft.Container(
         content=ft.Row([
@@ -1986,6 +2029,7 @@ MUSCLE_PERIOD_LABELS = {"7g": "Son 7 gün", "30g": "Son 30 gün", "90g": "Son 90
 
 
 def build_muscle_view(page):
+    # kas gelisimi sayfasi
     user_id = page.session.get("user_id")
     today = datetime.now().date()
 
@@ -2041,23 +2085,16 @@ def build_muscle_view(page):
                 user_id, selected_exercise, days=MUSCLE_PERIOD_DAYS[period_key])
 
     def set_period(p):
+        # donem secimini kaydedip sayfayi yenileyen handler uretir
         def handler(e):
+            # donemi kaydet, sayfayi yenile
             page.session.set("muscle_period", p)
             refresh_view(page, "/muscle")
         return handler
 
     def period_btn(label, key):
-        active = period_key == key
-        return ft.FilledButton(
-            label, on_click=set_period(key),
-            style=ft.ButtonStyle(
-                bgcolor=PRIMARY if active else SURFACE_DARK_2,
-                color="white" if active else TEXT_SECONDARY,
-                shape=ft.RoundedRectangleBorder(radius=10),
-                padding=ft.padding.symmetric(horizontal=18, vertical=14),
-                text_style=ft.TextStyle(weight="bold", size=13),
-            ),
-        )
+        # donem secici buton
+        return period_button(label, period_key == key, set_period(key))
 
     period_buttons = ft.Row([
         period_btn("7 Gün", "7g"),
@@ -2066,65 +2103,8 @@ def build_muscle_view(page):
         period_btn("Özel aralık", "custom"),
     ], spacing=8, wrap=True)
 
-    def on_start_change(e):
-        if e.control.value:
-            page.session.set("muscle_custom_start", e.control.value.date().isoformat())
-            page.session.set("muscle_period", "custom")
-            refresh_view(page, "/muscle")
-
-    def on_end_change(e):
-        if e.control.value:
-            page.session.set("muscle_custom_end", e.control.value.date().isoformat())
-            page.session.set("muscle_period", "custom")
-            refresh_view(page, "/muscle")
-
-    start_picker = ft.DatePicker(
-        first_date=datetime(2024, 1, 1),
-        last_date=datetime.now(),
-        on_change=on_start_change,
-    )
-    end_picker = ft.DatePicker(
-        first_date=datetime(2024, 1, 1),
-        last_date=datetime.now(),
-        on_change=on_end_change,
-    )
-
-    def _ensure_in_overlay(ctrl):
-        if ctrl not in page.overlay:
-            page.overlay.append(ctrl)
-
-    def open_start(e):
-        _ensure_in_overlay(start_picker)
-        try:
-            page.open(start_picker)
-        except Exception:
-            start_picker.open = True
-            page.update()
-
-    def open_end(e):
-        _ensure_in_overlay(end_picker)
-        try:
-            page.open(end_picker)
-        except Exception:
-            end_picker.open = True
-            page.update()
-
-    def date_field(label, value, on_click):
-        return ft.Container(
-            content=ft.Row([
-                ft.Icon(ft.Icons.CALENDAR_TODAY, color=PRIMARY_LIGHT, size=18),
-                ft.Column([
-                    ft.Text(label, size=10, color=TEXT_MUTED),
-                    ft.Text(value, size=13, weight="bold", color=TEXT_PRIMARY),
-                ], spacing=0),
-            ], spacing=10),
-            padding=ft.padding.symmetric(horizontal=14, vertical=10),
-            bgcolor=SURFACE_DARK_2,
-            border=ft.border.all(1, BORDER_DARK),
-            border_radius=10,
-            on_click=on_click,
-            ink=True,
-        )
+    open_start = date_picker_opener(page, "muscle_custom_start", "muscle_period", "custom", "/muscle")
+    open_end = date_picker_opener(page, "muscle_custom_end", "muscle_period", "custom", "/muscle")
 
     custom_range_row = ft.Container(
         content=ft.Row([
@@ -2137,22 +2117,18 @@ def build_muscle_view(page):
     )
 
     def on_exercise_change(e):
+        # ilerleme grafigi icin hareket secimi degisince yeniler
         page.session.set("muscle_selected_exercise", e.control.value)
         refresh_view(page, "/muscle")
 
-    exercise_picker = ft.Dropdown(
-        label="Hareket seç",
+    exercise_picker = dropdown(
+        "Hareket seç", strength_exercises,
         value=selected_exercise if selected_exercise in strength_exercises else None,
         on_change=on_exercise_change,
-        border_color=BORDER_DARK, focused_border_color=PRIMARY,
-        bgcolor=SURFACE_DARK_2, border_radius=12,
-        content_padding=ft.padding.all(16),
-        label_style=ft.TextStyle(color=TEXT_SECONDARY),
-        text_style=ft.TextStyle(color=TEXT_PRIMARY),
-        options=[ft.dropdown.Option(name) for name in strength_exercises],
     )
 
     def build_volume_chart():
+        # kas grubuna gore haftalik hacim grafigi
         cats = [c for c in STRENGTH_CATEGORIES if volume_by_cat.get(c, 0) > 0]
         if not cats:
             return ft.Container(
@@ -2208,6 +2184,7 @@ def build_muscle_view(page):
         )
 
     def build_progress_chart():
+        # agirlik + tahmini 1RM ilerleme grafigi
         if not history:
             return ft.Container(
                 content=ft.Text("Bu hareket için kayıt yok", color=TEXT_MUTED, size=13),
@@ -2255,6 +2232,7 @@ def build_muscle_view(page):
         )
 
     def render_pr_row(pr):
+        # kisisel rekor satiri
         ex_name = pr["exercise_name"]
         prog = progression_by_ex.get(ex_name)
         delta_widget = ft.Container()
@@ -2390,6 +2368,7 @@ def build_muscle_view(page):
 
 
 def build_profile_view(page):
+    # profil sayfasi
     user_id = page.session.get("user_id")
     user = database.get_user_by_id(user_id)
 
@@ -2405,21 +2384,11 @@ def build_profile_view(page):
                      prefix_icon=ft.Icons.CAKE, width=160,
                      keyboard_type=ft.KeyboardType.NUMBER)
 
-    gender = ft.Dropdown(
-        label="Cinsiyet", value=user.get("gender", ""), width=160,
-        border_color=BORDER_DARK, focused_border_color=PRIMARY,
-        bgcolor=SURFACE_DARK_2, border_radius=12,
-        content_padding=ft.padding.all(16),
-        label_style=ft.TextStyle(color=TEXT_SECONDARY),
-        text_style=ft.TextStyle(color=TEXT_PRIMARY),
-        options=[
-            ft.dropdown.Option("Erkek"),
-            ft.dropdown.Option("Kadın"),
-            ft.dropdown.Option("Diğer"),
-        ],
-    )
+    gender = dropdown("Cinsiyet", ("Erkek", "Kadın", "Diğer"),
+                      value=user.get("gender", ""), width=160)
 
     def save(e):
+        # profil bilgilerini kaydeder
         try:
             database.update_user_profile(
                 user_id,
@@ -2475,12 +2444,14 @@ def build_profile_view(page):
     m_note = text_field("Not (opsiyonel)", prefix_icon=ft.Icons.NOTE, width=340)
 
     def _opt_float(field):
+        # bos alani None, dolu alani sayiya cevirir
         try:
             return float(field.value) if field.value else None
         except ValueError:
             return None
 
     def save_measurement(e):
+        # vucut olcumunu kaydeder
         fields = [m_weight, m_chest, m_waist, m_hip, m_arm, m_thigh, m_fat]
         if not any(f.value for f in fields):
             show_snack(page, "En az bir ölçü gir", DANGER)
@@ -2505,6 +2476,7 @@ def build_profile_view(page):
     measurements = database.get_body_measurements(user_id)
 
     def build_measurement_chart():
+        # kilo degisim grafigi
         if len(measurements) < 2:
             return ft.Container(
                 content=ft.Column([
@@ -2568,6 +2540,7 @@ def build_profile_view(page):
         )
 
     def render_measurement_row(m):
+        # tek olcum satiri
         parts = []
         for key, label, unit in [
             ("weight_kg", "Kilo", "kg"), ("chest_cm", "Göğüs", "cm"),
@@ -2580,6 +2553,7 @@ def build_profile_view(page):
                 parts.append(f"{label}: {v:g} {unit}")
 
         def del_handler(e):
+            # olcumu siler
             database.delete_body_measurement(m["id"], user_id)
             show_snack(page, "Ölçüm silindi", WARNING)
             refresh_view(page, "/profile")
