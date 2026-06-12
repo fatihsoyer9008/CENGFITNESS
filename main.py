@@ -431,8 +431,11 @@ CAMERA_HTML = r"""<!DOCTYPE html>
 
   <div class="info" id="info">Aşağıdan kamerayı başlat, yemeği çerçeveye al ve fotoğraf çek.</div>
 
+  <input type="file" accept="image/*" id="fileInput" style="display:none" onchange="handleFile(event)">
+
   <div class="btn-row" id="btnRow">
     <button id="startBtn" onclick="startCamera()">Kamerayı Aç</button>
+    <button id="galleryBtn" class="secondary hidden" onclick="document.getElementById('fileInput').click()">Galeriden Seç</button>
     <button id="captureBtn" class="hidden" onclick="captureAndAnalyze()">Fotoğraf Çek</button>
     <button id="switchBtn" class="secondary hidden" onclick="switchCamera()">Çevir</button>
     <button id="retryBtn" class="secondary hidden" onclick="reset()">Tekrar Dene</button>
@@ -450,6 +453,7 @@ const loading = document.getElementById('loading');
 const loadingText = document.getElementById('loadingText');
 const info = document.getElementById('info');
 const startBtn = document.getElementById('startBtn');
+const galleryBtn = document.getElementById('galleryBtn');
 const captureBtn = document.getElementById('captureBtn');
 const switchBtn = document.getElementById('switchBtn');
 const retryBtn = document.getElementById('retryBtn');
@@ -458,6 +462,9 @@ const result = document.getElementById('result');
 let stream = null;
 let facingMode = 'environment';
 let lastResult = null;
+
+const IS_ANDROID = /android/i.test(navigator.userAgent);
+if (IS_ANDROID) galleryBtn.classList.remove('hidden');
 
 function setInfo(msg, isError) {
   info.textContent = msg;
@@ -479,6 +486,7 @@ async function startCamera() {
     video.srcObject = stream;
     placeholder.classList.add('hidden');
     startBtn.classList.add('hidden');
+    galleryBtn.classList.add('hidden');
     retryBtn.classList.add('hidden');
     captureBtn.classList.remove('hidden');
     switchBtn.classList.remove('hidden');
@@ -492,6 +500,7 @@ async function startCamera() {
     else if (err.name === 'NotReadableError') msg = 'Kamera başka bir uygulama tarafından kullanılıyor.';
     setInfo('Kamera açılamadı: ' + msg, true);
     startBtn.classList.remove('hidden');
+    if (IS_ANDROID) galleryBtn.classList.remove('hidden');
     captureBtn.classList.add('hidden');
     switchBtn.classList.add('hidden');
   }
@@ -502,23 +511,14 @@ async function switchCamera() {
   await startCamera();
 }
 
-async function captureAndAnalyze() {
-  if (!stream) return;
-  const w = video.videoWidth || 640;
-  const h = video.videoHeight || 480;
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(video, 0, 0, w, h);
-  const b64 = canvas.toDataURL('image/jpeg', 0.88);
-
-  stream.getTracks().forEach(t => t.stop());
-  stream = null;
-  video.srcObject = null;
+async function analyzeBase64(b64) {
+  placeholder.classList.add('hidden');
   preview.src = b64;
   preview.style.display = 'block';
   video.style.display = 'none';
 
+  startBtn.classList.add('hidden');
+  galleryBtn.classList.add('hidden');
   captureBtn.classList.add('hidden');
   switchBtn.classList.add('hidden');
   loading.classList.add('show');
@@ -545,6 +545,32 @@ async function captureAndAnalyze() {
     setInfo('Bağlantı hatası: ' + err.message, true);
     retryBtn.classList.remove('hidden');
   }
+}
+
+async function captureAndAnalyze() {
+  if (!stream) return;
+  const w = video.videoWidth || 640;
+  const h = video.videoHeight || 480;
+  canvas.width = w;
+  canvas.height = h;
+  canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+  const b64 = canvas.toDataURL('image/jpeg', 0.88);
+
+  stream.getTracks().forEach(t => t.stop());
+  stream = null;
+  video.srcObject = null;
+  await analyzeBase64(b64);
+}
+
+function handleFile(e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; video.srcObject = null; }
+  const reader = new FileReader();
+  reader.onload = () => analyzeBase64(reader.result);
+  reader.onerror = () => setInfo('Dosya okunamadı.', true);
+  reader.readAsDataURL(file);
+  e.target.value = '';
 }
 
 function renderResult(d) {
@@ -626,6 +652,7 @@ function reset() {
   loading.classList.remove('show');
   placeholder.classList.remove('hidden');
   startBtn.classList.remove('hidden');
+  if (IS_ANDROID) galleryBtn.classList.remove('hidden');
   captureBtn.classList.add('hidden');
   switchBtn.classList.add('hidden');
   retryBtn.classList.add('hidden');

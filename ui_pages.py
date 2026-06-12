@@ -728,6 +728,7 @@ def build_dashboard_view(page):
 def build_scan_view(page, server_url, upload_dir):
     user_id = page.session.get("user_id")
     is_phone = is_mobile(page)
+    is_android = "android" in (page.client_user_agent or "").lower()
 
     PICK_LABEL = "Fotoğraf Çek" if is_phone else "Dosya / Galeri"
     PICK_ICON = ft.Icons.PHOTO_CAMERA if is_phone else ft.Icons.PHOTO_LIBRARY
@@ -987,6 +988,12 @@ def build_scan_view(page, server_url, upload_dir):
             window_width=440, window_height=760,
         )
 
+    def open_camera_tab(e):
+        if not user_id:
+            show_snack(page, "Önce giriş yap", DANGER)
+            return
+        page.launch_url(f"/camera-page?user_id={user_id}", web_window_name="_blank")
+
     def scan_btn(text, icon, on_click, bg, visible=True):
         return ft.FilledButton(
             text=text, icon=icon, on_click=on_click, visible=visible,
@@ -998,7 +1005,11 @@ def build_scan_view(page, server_url, upload_dir):
             ),
         )
 
-    pick_btn = scan_btn(PICK_LABEL, PICK_ICON, open_picker, PRIMARY)
+    pick_btn = scan_btn(
+        PICK_LABEL, PICK_ICON,
+        open_camera_tab if is_android else open_picker,
+        PRIMARY,
+    )
     live_btn = scan_btn("Kamerayı Aç", ft.Icons.VIDEOCAM, open_camera_popup,
                         ACCENT, visible=not is_phone)
     analyze_btn = scan_btn("Analiz Et", ft.Icons.AUTO_AWESOME,
@@ -1010,11 +1021,12 @@ def build_scan_view(page, server_url, upload_dir):
         border_radius=20, border=ft.border.all(2, PRIMARY_DARK),
     )
 
-    set_info(
-        "Butona basınca telefonun 'kamera' veya 'galeri' seçeneği çıkar."
-        if is_phone else
-        "Kameradan çek ya da galerideki fotoğrafı seç."
-    )
+    if is_android:
+        set_info("Butona basınca kamera ve galeri seçenekleri açılır.")
+    elif is_phone:
+        set_info("Butona basınca telefonun 'kamera' veya 'galeri' seçeneği çıkar.")
+    else:
+        set_info("Kameradan çek ya da galerideki fotoğrafı seç.")
 
     button_row = (
         ft.Row([pick_btn], alignment="center")
