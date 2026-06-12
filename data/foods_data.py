@@ -1,3 +1,4 @@
+# yemek gunlugundeki hazir liste; degerler 1 porsiyon icindir
 FOODS = [
     # Çorbalar
     {"name": "Mercimek çorbası",     "category": "Çorbalar", "portion_name": "kase", "portion_g": 250, "kcal": 150, "protein_g": 8,  "carbs_g": 25, "fat_g": 3},
@@ -160,6 +161,7 @@ FOODS = [
 
 
 def get_categories():
+    # kategori listesi, eklenme sirasiyla
     seen = []
     for f in FOODS:
         if f["category"] not in seen:
@@ -168,18 +170,13 @@ def get_categories():
 
 
 def get_by_category(category):
+    # secilen kategorideki yemekler
     return [f for f in FOODS if f["category"] == category]
 
 
 def find_by_name(name):
+    # tam ad eslesmesiyle yemek bulur
     for f in FOODS:
         if f["name"] == name:
             return f
     return None
-
-
-def search(query):
-    q = (query or "").lower().strip()
-    if not q:
-        return list(FOODS)
-    return [f for f in FOODS if q in f["name"].lower()]

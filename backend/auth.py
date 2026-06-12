@@ -3,7 +3,7 @@ import os
 import re
 import sqlite3
 
-import database
+from backend import database
 
 
 PBKDF2_ITERATIONS = 200_000
@@ -14,6 +14,7 @@ EMAIL_REGEX = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
 def _hash_password(password, salt_hex):
+    # sifreyi duz metin saklamiyoruz, tuzlu pbkdf2 ile hashleyip oyle yaziyoruz
     salt = bytes.fromhex(salt_hex)
     dk = hashlib.pbkdf2_hmac(
         "sha256",
@@ -26,10 +27,12 @@ def _hash_password(password, salt_hex):
 
 
 def _generate_salt():
+    # her kullaniciya kayitta rastgele tuz uretilir
     return os.urandom(SALT_BYTES).hex()
 
 
 def _constant_time_compare(a, b):
+    # karsilastirma suresi icerige gore degismesin diye karakter karakter XOR
     if len(a) != len(b):
         return False
     result = 0
@@ -39,16 +42,19 @@ def _constant_time_compare(a, b):
 
 
 def validate_email(email):
+    # basit e-posta format kontrolu
     return bool(email and EMAIL_REGEX.match(email.strip()))
 
 
 def validate_password(password):
+    # minimum uzunluk kontrolu
     if not password or len(password) < 6:
         return False, "Şifre en az 6 karakter olmalı."
     return True, ""
 
 
 def register(email, password, name, weight_kg, height_cm, age, gender):
+    # yeni kullanici kaydi: alanlari dogrula, sifreyi hashle, veritabanina yaz
     if not validate_email(email):
         return False, "Geçerli bir e-posta adresi girin.", None
 
@@ -97,11 +103,13 @@ def register(email, password, name, weight_kg, height_cm, age, gender):
 
 
 def login(email, password):
+    # e-posta + sifre dogrulamasi, basariliysa kullanici bilgisini doner
     if not email or not password:
         return False, "E-posta ve şifre gerekli.", None
 
     user = database.get_user_by_email(email)
     if not user:
+        # kullanici yok desek bilgi sizdirmis oluruz, ayni mesaji veriyoruz
         return False, "E-posta veya şifre hatalı.", None
 
     expected = _hash_password(password, user["salt"])
