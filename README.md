@@ -34,13 +34,27 @@ Telefondan, bilgisayardan, aynı linkten kullanılabiliyor.
 | Arayüz | Flet 0.25.2 (Flutter tabanlı Python UI) |
 | Sunucu | FastAPI + Uvicorn |
 | Veritabanı | SQLite |
-| Görüntü tanıma | YOLO (Ultralytics) – Food-101 üzerine eğitildi, 101 yemek sınıfı |
+| Görüntü tanıma | YOLO (Ultralytics) – [Food-101](https://www.kaggle.com/datasets/dansbecker/food-101) üzerine eğitildi, 101 yemek sınıfı |
 | Besin değeri | Google Gemini (`gemini-2.5-flash`) |
 | Grafikler | Flet'in yerleşik LineChart / BarChart bileşenleri |
 
 Flet, FastAPI'nin altına monte edildiği için arayüz ve API tek port (8000)
 üzerinden sunuluyor. Bu sayede uygulama tek bir adresten dışarı açılabiliyor;
 canlıda Nginx + Cloudflare ile https://cengfitness.com adresinde yayında.
+
+### Kütüphaneler (requirements.txt)
+
+| Paket | Ne işe yarıyor |
+|-------|----------------|
+| `flet` | Arayüzü oluşturan, Flutter tabanlı Python UI çatısı |
+| `flet-web` | Flet'in web/FastAPI desteği; uygulamanın tarayıcıda çalışmasını sağlar |
+| `fastapi` | API uç noktalarını (`/analyze`, `/save-food-log` vb.) sunan web çatısı |
+| `uvicorn` | FastAPI uygulamasını çalıştıran ASGI sunucusu |
+| `requests` | Sunucu içi HTTP istekleri (analiz çağrısı) için |
+| `numpy` | Görüntüyü sayısal dizi olarak işlemek için |
+| `opencv-python` | Fotoğrafı çözme, ortadan kare kırpma ve yeniden boyutlandırma |
+| `ultralytics` | YOLO modelini yükleyip tahmin almak için (PyTorch'u da yanında getirir) |
+| `google-generativeai` | Google Gemini'den besin değerlerini almak için |
 
 ## Proje yapısı
 
@@ -77,6 +91,21 @@ bu adresten hesap oluşturup başlayabilirsin. Uygulama bir Windows sunucuda
 
 Aşağıdaki adımlar yalnızca projeyi kendi bilgisayarında çalıştırmak isteyenler
 içindir.
+
+## Donanım ve yazılım gereksinimleri
+
+**Yazılım**
+
+- İşletim sistemi: Windows, macOS veya Linux
+- Python 3.10 veya üzeri
+- İnternet bağlantısı – ilk kurulumda paketlerin inmesi ve besin analizi için
+  yapılan Gemini API çağrıları gerektiriyor
+
+**Donanım**
+
+- En az 4 GB RAM (8 GB önerilir)
+- Yaklaşık 2-3 GB boş disk alanı (PyTorch, Ultralytics ve model dosyaları için)
+- GPU şart değil; model CPU üzerinde de çalışır (GPU varsa tahmin daha hızlı olur)
 
 ## Kurulum
 
@@ -187,6 +216,16 @@ sorulur. (Operatör DNS'i adresi geç çözebilir; açılmazsa telefonun DNS'ini
 Şifreler düz metin olarak tutulmaz; her kullanıcı için rastgele salt üretilip
 PBKDF2-HMAC-SHA256 (200.000 tur) ile hash'lenir. Şifre karşılaştırması sabit
 sürede yapılır.
+
+## Veri seti
+
+Görüntü tanıma modeli (`best.pt`) **Food-101** veri seti üzerinde eğitildi:
+
+https://www.kaggle.com/datasets/dansbecker/food-101
+
+Veri seti 101 yemek sınıfı ve sınıf başına 1.000 görüntü içeriyor. Eğitimden önce
+veriler YOLO sınıflandırma formatına (her sınıf için ayrı klasör) dönüştürüldü;
+20 epoch eğitim sonunda top-1 doğruluk ~%83, top-5 doğruluk ~%96 elde edildi.
 
 ## Veritabanı
 
