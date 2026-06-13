@@ -124,4 +124,6 @@ api.mount("/", flet_sub_app)
 
 
 if __name__ == "__main__":
+    # her sey hazir, sunucu ayaga kalkiyor
+    print("[OK] CENG FITNESS calisiyor -> http://localhost:8000")
     uvicorn.run(api, host="0.0.0.0", port=8000, log_level="warning")
