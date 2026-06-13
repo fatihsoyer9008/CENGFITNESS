@@ -87,7 +87,7 @@ venv\Scripts\activate
 source venv/bin/activate
 ```
 
-**2. Bağımlılıkları yükle**
+**2. Bağımlılıkları yükle (Bu işlem biraz zaman alabilir)**
 
 ```bash
 pip install -r requirements.txt
