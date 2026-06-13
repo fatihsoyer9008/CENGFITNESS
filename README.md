@@ -97,10 +97,10 @@ pip install -r requirements.txt
 
 **3. Gemini API anahtarını tanımla**
 
-`.env.example` dosyasını `.env` olarak kopyala ve kendi anahtarını gir:
+`.env.example` dosyasını `.env` olarak yeniden adlandır ve kendi anahtarını gir:
 
 ```bash
-cp .env.example .env
+mv .env.example .env
 ```
 ```
 Proje klasörüne girip oradan .envyi açın içine anahtarı yapıştırın.Anahtarı https://aistudio.google.com/apikey adresinden ücretsiz alabilirsin.
