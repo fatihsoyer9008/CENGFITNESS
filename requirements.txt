@@ -1,4 +1,5 @@
 flet==0.25.2
+flet-web==0.25.2
 fastapi>=0.110
 uvicorn>=0.29
 requests>=2.31
