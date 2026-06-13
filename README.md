@@ -39,8 +39,8 @@ Telefondan, bilgisayardan, aynı linkten kullanılabiliyor.
 | Grafikler | Flet'in yerleşik LineChart / BarChart bileşenleri |
 
 Flet, FastAPI'nin altına monte edildiği için arayüz ve API tek port (8000)
-üzerinden sunuluyor. Bu, uygulamayı tek bir Cloudflare Tunnel ile dışarı açmayı
-mümkün kılıyor.
+üzerinden sunuluyor. Bu sayede uygulama tek bir adresten dışarı açılabiliyor;
+canlıda Nginx + Cloudflare ile https://cengfitness.com adresinde yayında.
 
 ## Proje yapısı
 
@@ -65,6 +65,18 @@ CENGFITNESS/
 
 Veritabanı dosyası (`cengfitness.db`) ilk çalıştırmada otomatik oluşur,
 `.gitignore` ile depodan dışarıda tutulur (kullanıcı verisi gizli kalsın).
+
+## Canlı sürüm
+
+Proje yayında: **https://cengfitness.com**
+
+Sadece uygulamayı kullanmak istiyorsan kurulumla uğraşmana gerek yok; doğrudan
+bu adresten hesap oluşturup başlayabilirsin. Uygulama bir Windows sunucuda
+çalışıyor, önünde Nginx ters vekil olarak duruyor ve SSL/HTTPS Cloudflare
+üzerinden sağlanıyor.
+
+Aşağıdaki adımlar yalnızca projeyi kendi bilgisayarında çalıştırmak isteyenler
+içindir.
 
 ## Kurulum
 
@@ -127,11 +139,17 @@ hesap oluştur ve kullanmaya başla.
 İlk açılışta YOLO modeli belleğe yüklendiği için birkaç saniye bekleyebilirsin
 (`[OK] YOLO modeli hazir.` yazısını görünce hazırdır).
 
-## Telefondan kullanma (Cloudflare Tunnel)
+## Telefondan kullanma
 
-Kamerayla tarama özelliği HTTPS gerektirir; bu yüzden telefondan denemek için
-yerel sunucuyu güvenli bir adres üzerinden açmak gerekir. En pratik yol Cloudflare
-Tunnel:
+Uygulama yayında olduğu için telefondan kullanmak çok basit: tarayıcıdan
+**https://cengfitness.com** adresine gir, hesabını oluştur. HTTPS hazır
+olduğundan kamerayla tarama izni de doğrudan çalışır.
+
+### Yerelde geliştirirken telefondan test (Cloudflare Tunnel)
+
+Projeyi kendi bilgisayarında çalıştırıp telefondan denemek istersen, kamera
+HTTPS gerektirdiği için yerel sunucuyu geçici bir adresle dışarı açabilirsin.
+Geliştirme aşamasında kullandığımız yöntem buydu:
 
 ```bash
 # uygulama çalışırken ayrı bir terminalde
