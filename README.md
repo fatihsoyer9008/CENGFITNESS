@@ -102,12 +102,13 @@ pip install -r requirements.txt
 ```bash
 cp .env.example .env
 ```
-
+```
+Proje klasörüne girip oradan .envyi açın içine anahtarı yapıştırın.Anahtarı https://aistudio.google.com/apikey adresinden ücretsiz alabilirsin.
+```
 ```
 GEMINI_API_KEY=buraya_kendi_anahtarin
 ```
 
-Anahtarı https://aistudio.google.com/apikey adresinden ücretsiz alabilirsin.
 `.env` dosyası git'e gönderilmez.
 
 **4. Model dosyası**
